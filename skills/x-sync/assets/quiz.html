@@ -1,0 +1,282 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>X-Sync · 仓库同步问答</title>
+  <style>
+    :root {
+      --ink: #17211d;
+      --muted: #64716b;
+      --paper: #fbfaf6;
+      --card: #ffffff;
+      --line: #dfe4df;
+      --accent: #146c5a;
+      --accent-soft: #e3f2ec;
+      --warn: #99541f;
+      --danger: #a33a37;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; color: var(--ink); background: var(--paper); }
+    .shell { width: min(860px, calc(100% - 32px)); margin: 0 auto; padding: 36px 0 72px; }
+    header { display: flex; justify-content: space-between; gap: 24px; align-items: flex-start; margin-bottom: 24px; }
+    .eyebrow { margin: 0 0 8px; color: var(--accent); font-size: .75rem; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
+    h1 { margin: 0; font-size: clamp(1.8rem, 5vw, 3rem); line-height: 1.05; }
+    .status { padding: 8px 12px; color: var(--muted); background: var(--card); border: 1px solid var(--line); border-radius: 999px; white-space: nowrap; }
+    .card { padding: clamp(22px, 5vw, 40px); background: var(--card); border: 1px solid var(--line); border-radius: 22px; box-shadow: 0 16px 50px rgba(30, 55, 45, .08); }
+    .meta { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 22px; }
+    .pill { padding: 6px 9px; color: var(--accent); background: var(--accent-soft); border-radius: 8px; font-size: .78rem; font-weight: 700; }
+    h2 { margin: 0 0 24px; font-size: clamp(1.25rem, 3vw, 1.7rem); line-height: 1.4; }
+    fieldset { margin: 0; padding: 0; border: 0; }
+    legend, label { display: block; margin-bottom: 9px; font-weight: 700; }
+    .choice { display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: start; margin: 10px 0; padding: 14px 16px; border: 1px solid var(--line); border-radius: 12px; cursor: pointer; }
+    .choice:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
+    textarea { width: 100%; min-height: 130px; resize: vertical; padding: 14px; color: inherit; background: #fff; border: 1px solid var(--line); border-radius: 12px; font: inherit; line-height: 1.55; }
+    .field { margin-top: 22px; }
+    .confidence { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
+    .confidence label { margin: 0; padding: 10px 6px; text-align: center; border: 1px solid var(--line); border-radius: 10px; cursor: pointer; font-size: .8rem; }
+    .confidence label:has(input:checked) { color: #fff; background: var(--accent); border-color: var(--accent); }
+    .confidence input { position: absolute; opacity: 0; pointer-events: none; }
+    button { margin-top: 26px; padding: 12px 18px; color: #fff; background: var(--accent); border: 0; border-radius: 11px; font: inherit; font-weight: 800; cursor: pointer; }
+    button:disabled { cursor: wait; opacity: .55; }
+    .message { margin-top: 18px; padding: 12px 14px; border-radius: 10px; color: var(--muted); background: #f1f3f1; }
+    .message[data-kind="error"] { color: var(--danger); background: #fbeceb; }
+    .message[data-kind="saved"] { color: var(--accent); background: var(--accent-soft); }
+    .empty { text-align: center; padding: 56px 20px; }
+    .empty p { color: var(--muted); line-height: 1.6; }
+    footer { margin-top: 20px; color: var(--muted); font-size: .82rem; line-height: 1.55; }
+    code { color: var(--warn); }
+    [hidden] { display: none !important; }
+    @media (max-width: 600px) {
+      header { display: block; }
+      .status { display: inline-block; margin-top: 18px; }
+      .confidence { grid-template-columns: 1fr; }
+      .confidence label { text-align: left; }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <header>
+      <div>
+        <p class="eyebrow">Human · Agent · Repository</p>
+        <h1>X-Sync</h1>
+      </div>
+      <div class="status" id="connection">正在连接…</div>
+    </header>
+
+    <section class="card" id="quiz" hidden>
+      <div class="meta" id="meta"></div>
+      <h2 id="prompt"></h2>
+      <form id="answer-form">
+        <fieldset id="choices" hidden>
+          <legend>选择一个答案</legend>
+          <div id="choice-list"></div>
+        </fieldset>
+        <div id="free-field" hidden>
+          <label for="free-answer">你的回答</label>
+          <textarea id="free-answer" maxlength="12000" placeholder="写出判断、因果关系、边界和证据；不知道也可以如实说明。"></textarea>
+        </div>
+        <div class="field" id="reason-field" hidden>
+          <label for="reason">为什么？你的依据在哪里？</label>
+          <textarea id="reason" maxlength="12000" placeholder="说明推理、证据，以及结论可能不成立的条件。"></textarea>
+        </div>
+        <fieldset class="field">
+          <legend>你对答案有多大把握？</legend>
+          <div class="confidence">
+            <label><input type="radio" name="confidence" value="1" required>1 · 猜测</label>
+            <label><input type="radio" name="confidence" value="2">2 · 不太确定</label>
+            <label><input type="radio" name="confidence" value="3">3 · 基本确定</label>
+            <label><input type="radio" name="confidence" value="4">4 · 很确定</label>
+            <label><input type="radio" name="confidence" value="5">5 · 可向他人解释</label>
+          </div>
+        </fieldset>
+        <button id="submit" type="submit">保存答案</button>
+      </form>
+      <div class="message" id="message" hidden></div>
+    </section>
+
+    <section class="card empty" id="empty">
+      <h2 id="empty-title">正在读取当前题目</h2>
+      <p id="empty-copy">页面只保存答案，不接收答案键。保存后请回到终端对 Codex 或 Claude Code 说“继续”。</p>
+    </section>
+
+    <footer>
+      服务仅监听本机回环地址。访问令牌保存在当前标签页的 sessionStorage 中，不写入 URL 查询参数或学习记录。
+    </footer>
+  </main>
+
+  <script>
+    (() => {
+      const $ = (id) => document.getElementById(id);
+      const fragment = new URLSearchParams(location.hash.slice(1));
+      const tokenFromUrl = fragment.get("token");
+      if (tokenFromUrl) {
+        sessionStorage.setItem("x-sync-token", tokenFromUrl);
+        history.replaceState(null, "", location.pathname + location.search);
+      }
+      const token = sessionStorage.getItem("x-sync-token") || "";
+      let snapshot = null;
+      let questionKey = "";
+
+      function authHeaders(json = false) {
+        const headers = { "Authorization": `Bearer ${token}` };
+        if (json) headers["Content-Type"] = "application/json";
+        return headers;
+      }
+
+      function text(el, value) { el.textContent = value == null ? "" : String(value); }
+
+      function showMessage(value, kind = "") {
+        const el = $("message");
+        text(el, value);
+        el.dataset.kind = kind;
+        el.hidden = !value;
+      }
+
+      function renderMeta(session, question) {
+        const items = [
+          `${(session.current_index ?? 0) + 1} / ${session.total ?? "?"}`,
+          (question.domain || question.axis) === "business" ? "业务" : "技术",
+          String(question.depth ?? question.level ?? "L0").replace(/^L?(\d+)$/, "L$1"),
+          (session.style || session.mode) === "socratic" ? "苏格拉底" : "常规问答",
+          question.topic || "未分类"
+        ];
+        const meta = $("meta");
+        meta.replaceChildren(...items.map((value) => {
+          const span = document.createElement("span");
+          span.className = "pill";
+          text(span, value);
+          return span;
+        }));
+      }
+
+      function render(payload) {
+        snapshot = payload;
+        const session = payload.session || payload.state || {};
+        const question = payload.question || null;
+        text($("connection"), "已连接");
+
+        if (!question || session.status === "completed") {
+          $("quiz").hidden = true;
+          $("empty").hidden = false;
+          text($("empty-title"), session.status === "completed" ? "本轮问答已完成" : "等待题目");
+          text($("empty-copy"), session.status === "completed"
+            ? "回到终端生成多维学习报告；结果只代表本次题目与仓库版本。"
+            : "请在终端启动或继续一个 x-sync session。");
+          return;
+        }
+
+        const key = `${question.id}:${question.probe || "initial"}:${session.state_version}`;
+        if (key !== questionKey) {
+          $("answer-form").reset();
+          showMessage("");
+          questionKey = key;
+        }
+        $("empty").hidden = true;
+        $("quiz").hidden = false;
+        renderMeta(session, question);
+        const activePrompt = question.probe
+          ? `追问：${question.probe}`
+          : (question.display_prompt || question.prompt);
+        text($("prompt"), activePrompt);
+
+        const isChoice = question.type === "single_choice";
+        $("choices").hidden = !isChoice;
+        $("free-field").hidden = isChoice;
+        $("reason-field").hidden = !isChoice && (session.style || session.mode) !== "socratic";
+        const list = $("choice-list");
+        list.replaceChildren();
+        if (isChoice) {
+          for (const choice of question.choices || []) {
+            const label = document.createElement("label");
+            label.className = "choice";
+            const input = document.createElement("input");
+            input.type = "radio";
+            input.name = "answer";
+            input.value = choice.id;
+            input.required = true;
+            const copy = document.createElement("span");
+            text(copy, `${choice.id}. ${choice.text}`);
+            label.append(input, copy);
+            list.append(label);
+          }
+          const unknown = document.createElement("label");
+          unknown.className = "choice";
+          const unknownInput = document.createElement("input");
+          unknownInput.type = "radio";
+          unknownInput.name = "answer";
+          unknownInput.value = "unknown";
+          unknownInput.required = true;
+          const unknownCopy = document.createElement("span");
+          text(unknownCopy, "不知道 / 当前证据不足");
+          unknown.append(unknownInput, unknownCopy);
+          list.append(unknown);
+        }
+
+        const pending = payload.pending_attempt || session.pending_attempt ||
+          ["answer_saved", "agent_review_pending", "reviewed"].includes(session.status);
+        if (pending) {
+          $("submit").disabled = true;
+          showMessage("答案已保存。请回到终端说“继续”进行检查。", "saved");
+        } else {
+          $("submit").disabled = false;
+        }
+      }
+
+      async function refresh() {
+        if (!token) throw new Error("缺少访问令牌，请重新打开终端给出的完整地址。");
+        const response = await fetch("/api/v1/state", { headers: authHeaders() });
+        if (!response.ok) throw new Error(`读取状态失败（${response.status}）`);
+        render(await response.json());
+      }
+
+      $("answer-form").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const session = snapshot?.session || snapshot?.state || {};
+        const question = snapshot?.question || {};
+        const answer = question.type === "single_choice"
+          ? new FormData(event.currentTarget).get("answer")
+          : $("free-answer").value.trim();
+        const confidenceLevel = Number(new FormData(event.currentTarget).get("confidence"));
+        if (!answer || !confidenceLevel) return;
+        $("submit").disabled = true;
+        showMessage("正在保存…");
+        const body = {
+          answer,
+          reason: $("reason").value.trim(),
+          confidence: (confidenceLevel - 1) / 4,
+          state_version: session.state_version ?? snapshot.state_version,
+          attempt_id: crypto.randomUUID()
+        };
+        try {
+          const response = await fetch("/api/v1/answer", {
+            method: "POST",
+            headers: authHeaders(true),
+            body: JSON.stringify(body)
+          });
+          if (response.status === 409) {
+            await refresh();
+            throw new Error("题目状态已经变化，页面已刷新，请重新确认答案。");
+          }
+          const result = await response.json();
+          if (!response.ok) throw new Error(result.message || `保存失败（${response.status}）`);
+          await refresh();
+        } catch (error) {
+          $("submit").disabled = false;
+          showMessage(error.message, "error");
+        }
+      });
+
+      refresh().catch((error) => {
+        text($("connection"), "连接失败");
+        text($("empty-title"), "无法连接 X-Sync");
+        text($("empty-copy"), error.message);
+      });
+      setInterval(() => refresh().catch(() => {}), 2500);
+    })();
+  </script>
+</body>
+</html>

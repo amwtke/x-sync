@@ -1,0 +1,7 @@
+{
+  "name": "x-sync",
+  "displayName": "x-sync",
+  "description": "Assess and improve human, agent, and repository alignment through evidence-backed questions.",
+  "repository": "https://github.com/amwtke/x-sync",
+  "skills": "./skills/"
+}

@@ -1,0 +1,16 @@
+{
+  "name": "x-sync",
+  "owner": {
+    "name": "amwtke",
+    "url": "https://github.com/amwtke"
+  },
+  "description": "Evidence-backed repository learning for Claude Code.",
+  "plugins": [
+    {
+      "name": "x-sync",
+      "source": "./",
+      "description": "Assess and improve human, agent, and repository alignment through adaptive questions.",
+      "repository": "https://github.com/amwtke/x-sync"
+    }
+  ]
+}

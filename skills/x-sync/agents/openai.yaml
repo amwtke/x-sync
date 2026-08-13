@@ -1,0 +1,7 @@
+interface:
+  display_name: "X-Sync"
+  short_description: "用仓库证据持续校准工程师、Agent 与代码之间的理解"
+  default_prompt: "Use $x-sync to assess and improve my task-specific understanding of this repository."
+
+policy:
+  allow_implicit_invocation: true
