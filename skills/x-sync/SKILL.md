@@ -1,6 +1,6 @@
 ---
 name: x-sync
-description: Assess and improve how well a person, an AI agent, and the current repository agree on task-relevant business and technical knowledge. Use for repository onboarding, knowledge checks, Socratic interviews, architecture or incident review, pre-agent task readiness, and spaced review grounded in specs, stories, commits, bug fixes, code, tests, infrastructure, and official technology sources. Supports terminal or local HTML quizzes. Do not use as an employee ranking tool or claim that one score measures understanding of an entire repository.
+description: Assess and improve how well a person, an AI agent, and the current repository agree on task-relevant business and technical knowledge. A bare $x-sync or /x-sync invocation immediately starts or resumes a local interactive HTML quiz, defaulting to Socratic dialogue, mixed business and technical coverage, and 5 questions. Use for repository onboarding, knowledge checks, architecture or incident review, pre-agent task readiness, and spaced review grounded in specs, stories, commits, bug fixes, code, tests, infrastructure, and official technology sources. Do not use as an employee ranking tool or claim that one score measures understanding of an entire repository.
 ---
 
 # X-Sync
@@ -19,15 +19,21 @@ Never assume a Codex- or Claude-specific environment variable exists. Resolve re
 
 ## Start every invocation
 
-1. Run `status --repo <repo> --learner <learner> --json` when the learner is already known.
-2. Otherwise run `doctor --repo <repo> --json`, then ask for a short learner ID. Explain that `.x-sync/` stores private local learning history; `init` adds `/.x-sync/` to this repository's local `.git/info/exclude` without changing the team's `.gitignore`.
-3. If no active session exists, ask one compact setup question covering:
-   - interview style: `regular` or `socratic`;
-   - channel: `terminal` or `web`;
-   - focus: `business`, `technical`, or `mixed`;
-   - task or subsystem in scope;
-   - desired question count and maximum depth.
-4. Prefer task-scoped assessment. If no task is supplied, define a bounded subsystem or onboarding objective instead of claiming to assess the whole repository.
+1. Run `doctor --repo <repo> --json`. Use a learner explicitly named by the user; otherwise use `default_learner` from the result. Explain the private local `.x-sync/` record only when creating that learner's first profile.
+2. Run `status --repo <repo> --learner <learner> --json`.
+3. Resume an unfinished active session instead of replacing it. Treat `question_open`, `answer_saved`, `agent_review_pending`, and `reviewed` as unfinished and preserve its stored configuration. If its stored channel is `web`, reopen its page with `serve --session <id> --port 0 --open`; if it is `terminal`, present or review it in the Agent terminal and do not call `serve`. Start a new session only when none exists, the active session is `completed`, or the user explicitly requests a new round.
+4. For a new session, merge explicit user choices over this bare-invocation preset:
+   - `style=socratic`;
+   - `channel=web`;
+   - `focus=mixed`;
+   - `count=5`;
+   - no maximum depth unless the user supplies one;
+   - a bounded repository-onboarding task chosen from the strongest available evidence.
+5. Do not ask a setup question for values supplied by this preset. If the user explicitly requests a different style, channel, focus, count, depth, task, or learner, override only that value.
+6. Reuse an installed bank only when it is fresh and can supply the requested session. For the default preset, require exactly five eligible Socratic questions and include both `business` and `technical` domains. Otherwise inspect the repository, generate, validate, and install a suitable bank before starting.
+7. After starting a web session, immediately run `serve --port 0 --open`, keep the yielded process running, and return the tokenized loopback URL. Do not stop after merely creating session state.
+
+Never silently abandon an unfinished session. If explicit new settings conflict with one, resume it unless the user clearly asks for a new round.
 
 ## Choose the interaction style
 
@@ -109,9 +115,11 @@ Start the selected bank:
 ```bash
 python3 <skill-dir>/scripts/xsync.py start \
   --repo <repo> --learner <learner> --bank <bank-id> \
-  --style regular --channel terminal --focus mixed --max-depth 4 \
-  --task "Refund retry change" --count 8 --json
+  --style socratic --channel web --focus mixed \
+  --task "Bounded repository onboarding" --count 5 --json
 ```
+
+The runtime's `start` defaults match this preset, but pass all four fields explicitly from the host so the persisted session is auditable. If the user explicitly chose `terminal`, present the question in the host instead of starting the HTML server.
 
 For terminal work, show the current question and save one durable answer:
 

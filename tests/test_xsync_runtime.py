@@ -940,7 +940,9 @@ class RuntimeTest(unittest.TestCase):
         command = [sys.executable, str(SCRIPT), "doctor", "--repo", str(self.repo), "--json"]
         result = subprocess.run(command, text=True, stdout=subprocess.PIPE,
                                 stderr=subprocess.PIPE, check=True)
-        self.assertTrue(json.loads(result.stdout)["ok"])
+        doctor = json.loads(result.stdout)
+        self.assertTrue(doctor["ok"])
+        self.assertRegex(doctor["default_learner"], xsync.LEARNER_RE)
         command = [sys.executable, str(SCRIPT), "bank", "validate", "--repo", str(self.repo),
                    "--file", str(self.bank_path), "--json"]
         result = subprocess.run(command, text=True, stdout=subprocess.PIPE,
@@ -955,6 +957,112 @@ class RuntimeTest(unittest.TestCase):
         self.assertEqual({"business", "architecture_data_flow", "technical_mechanisms",
                           "decisions_bugs", "non_functional"},
                          set(report["human_repository_profile"]))
+
+    def test_bare_start_defaults_and_explicit_overrides(self):
+        defaults = xsync.parser().parse_args([
+            "start", "--repo", str(self.repo), "--learner", "alice",
+            "--bank", "fixture-bank",
+        ])
+        self.assertEqual("socratic", defaults.style)
+        self.assertEqual("web", defaults.channel)
+        self.assertEqual("mixed", defaults.focus)
+        self.assertEqual(5, defaults.count)
+        self.assertIsNone(defaults.max_depth)
+
+        explicit = xsync.parser().parse_args([
+            "start", "--repo", str(self.repo), "--learner", "alice",
+            "--bank", "fixture-bank", "--style", "regular", "--channel", "terminal",
+            "--focus", "technical", "--count", "1", "--max-depth", "3",
+        ])
+        self.assertEqual("regular", explicit.style)
+        self.assertEqual("terminal", explicit.channel)
+        self.assertEqual("technical", explicit.focus)
+        self.assertEqual(1, explicit.count)
+        self.assertEqual(3, explicit.max_depth)
+
+        with mock.patch.object(xsync.getpass, "getuser", return_value="jin xiao"):
+            self.assertEqual("jin-xiao", xsync.default_learner())
+        with mock.patch.object(xsync.getpass, "getuser", return_value="肖劲"):
+            self.assertRegex(xsync.default_learner(), r"user-[0-9a-f]{12}")
+
+        status = xsync.learner_status(self.store)
+        self.assertEqual(["fixture-bank"], status["bank_ids"])
+        with self.assertRaisesRegex(xsync.XSyncError, "少于请求的 3 道"):
+            xsync.start_session(
+                self.store, "fixture-bank", "socratic", "web", count=3,
+                focus="mixed"
+            )
+
+        terminal = xsync.start_session(
+            self.store, "fixture-bank", "regular", "terminal", count=1,
+            focus="business"
+        )
+        with self.assertRaisesRegex(xsync.XSyncError, "配置为 terminal"):
+            xsync.serve(self.store, terminal["session_id"], "127.0.0.1", 0, False)
+
+    def test_finite_mixed_session_balances_domains_and_prerequisites(self):
+        commit = xsync.git(self.repo, "rev-parse", "HEAD")
+        bank = fixture_bank(commit, self.repository_id)
+        bank["bank_id"] = "mixed-five"
+        source_business = bank["questions"][0]
+        business = []
+        for index in range(5):
+            question = json.loads(json.dumps(source_business))
+            question["id"] = f"business.{index}"
+            question["prompt"] = f"Business question {index}?"
+            business.append(question)
+        technical = json.loads(json.dumps(bank["questions"][1]))
+        technical["id"] = "technical.boundary"
+        technical["prerequisite_question_ids"] = ["business.4"]
+        bank["questions"] = [*business, technical]
+        path = self.repo / "mixed-five.json"
+        path.write_text(json.dumps(bank), encoding="utf-8")
+        xsync.install_bank(self.store, path)
+
+        started = xsync.start_session(
+            self.store, "mixed-five", "socratic", "web", count=5, focus="mixed"
+        )
+        snapshot = json.loads(
+            (self.store.session_dir(started["session_id"]) / "bank.json").read_text()
+        )
+        self.assertEqual(5, len(snapshot["questions"]))
+        self.assertEqual(
+            {"business", "technical"},
+            {question["domain"] for question in snapshot["questions"]},
+        )
+        selected_ids = []
+        for question in snapshot["questions"]:
+            self.assertLessEqual(
+                set(question["prerequisite_question_ids"]), set(selected_ids)
+            )
+            selected_ids.append(question["id"])
+
+        # Prefer a feasible short prerequisite path when an earlier target's
+        # chain cannot fit into the finite mixed session.
+        def q(question_id, domain, prerequisites=()):
+            return {"id": question_id, "domain": domain,
+                    "prerequisite_question_ids": list(prerequisites)}
+
+        competing_paths = [
+            q("b0", "business"),
+            q("p1", "business"),
+            q("p2", "business", ["p1"]),
+            q("p3", "business", ["p2"]),
+            q("p4", "business", ["p3"]),
+            q("p5", "business", ["p4"]),
+            q("t-long", "technical", ["p5"]),
+            q("b-short", "business"),
+            q("t-short", "technical", ["b-short"]),
+        ]
+        selected = xsync.select_session_questions(competing_paths, 5, "mixed")
+        selected_ids = [question["id"] for question in selected]
+        self.assertIn("t-short", selected_ids)
+        self.assertNotIn("t-long", selected_ids)
+        self.assertEqual(5, len(selected_ids))
+        emitted = set()
+        for question in selected:
+            self.assertLessEqual(set(question["prerequisite_question_ids"]), emitted)
+            emitted.add(question["id"])
 
 
 if __name__ == "__main__":

@@ -4,7 +4,7 @@ Use this protocol to generate, conduct, grade, and review repository-grounded qu
 
 ## Select the dialogue mode
 
-Ask the learner to select `regular` or `socratic` at session start. Store the selection as `style` in session configuration and preserve it in every attempt record.
+Default a bare skill invocation to `socratic`; use `regular` when the learner explicitly requests it. Store the resolved selection as `style` in session configuration and preserve it in every attempt record. Do not ask for a mode when the default already resolves it.
 
 For `regular` mode:
 

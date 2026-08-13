@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import datetime as dt
+import getpass
 import hashlib
 import http.server
 import json
@@ -45,6 +46,10 @@ SENSITIVE_PARTS = {".git", ".x-sync", ".ssh", ".aws", ".gnupg"}
 SENSITIVE_SUFFIXES = {".pem", ".key", ".p12", ".pfx", ".kdbx"}
 MAX_FOCUSED_EVIDENCE_BYTES = 1_000_000
 MAX_COMMIT_EVIDENCE_BYTES = 5_000_000
+DEFAULT_STYLE = "socratic"
+DEFAULT_CHANNEL = "web"
+DEFAULT_FOCUS = "mixed"
+DEFAULT_QUESTION_COUNT = 5
 
 
 class XSyncError(Exception):
@@ -122,6 +127,21 @@ def validate_component(value: str, kind: str, pattern: re.Pattern[str]) -> str:
 
 def validate_learner(value: str) -> str:
     return validate_component(value, " learner", LEARNER_RE)
+
+
+def default_learner() -> str:
+    """Resolve a stable local profile without exposing an email address."""
+    try:
+        raw = getpass.getuser().strip()
+    except (KeyError, OSError):
+        raw = ""
+    normalized = re.sub(r"[^A-Za-z0-9_.-]+", "-", raw).strip("._-")
+    normalized = normalized[:64].rstrip("._-")
+    if normalized and LEARNER_RE.fullmatch(normalized):
+        return normalized
+    if raw:
+        return "user-" + hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12]
+    return "local-user"
 
 
 def safe_child(root: Path, *parts: str) -> Path:
@@ -1022,6 +1042,75 @@ def prioritize_questions(store: Store, questions: list[dict]) -> list[dict]:
     return ordered
 
 
+def select_session_questions(questions: list[dict], count: int | None,
+                             focus: str) -> list[dict]:
+    """Select a dependency-safe prefix and make finite mixed sessions truly mixed."""
+    if count is None:
+        return questions
+    if not isinstance(count, int) or isinstance(count, bool) or count < 1:
+        raise XSyncError("--count 必须为正整数")
+    if len(questions) < count:
+        raise XSyncError(
+            f"题库只有 {len(questions)} 道可用题，少于请求的 {count} 道；请补充题库"
+        )
+    if focus != "mixed":
+        return questions[:count]
+    required_domains = {"business", "technical"}
+    available_domains = {question["domain"] for question in questions}
+    if count < 2 or not required_domains <= available_domains:
+        raise XSyncError("mixed 会话必须至少两题，并同时包含 business 与 technical")
+
+    order = {question["id"]: index for index, question in enumerate(questions)}
+    by_id = {question["id"]: question for question in questions}
+    closure_cache: dict[str, frozenset[str]] = {}
+
+    def prerequisite_closure(question_id: str, visiting: frozenset[str] = frozenset()
+                             ) -> frozenset[str]:
+        cached = closure_cache.get(question_id)
+        if cached is not None:
+            return cached
+        if question_id in visiting:
+            raise XSyncError("题库 prerequisite_question_ids 存在循环")
+        question = by_id.get(question_id)
+        if question is None:
+            raise XSyncError(f"题目 prerequisite 不存在: {question_id}")
+        result = {question_id}
+        for prerequisite in question.get("prerequisite_question_ids", []):
+            result.update(prerequisite_closure(prerequisite, visiting | {question_id}))
+        frozen = frozenset(result)
+        closure_cache[question_id] = frozen
+        return frozen
+
+    business = [question for question in questions if question["domain"] == "business"]
+    technical = [question for question in questions if question["domain"] == "technical"]
+    feasible: list[tuple[tuple, set[str]]] = []
+    for business_question in business:
+        for technical_question in technical:
+            required = set(prerequisite_closure(business_question["id"]))
+            required.update(prerequisite_closure(technical_question["id"]))
+            if len(required) <= count:
+                indices = sorted(order[question_id] for question_id in required)
+                score = (
+                    max(order[business_question["id"]], order[technical_question["id"]]),
+                    len(required), tuple(indices),
+                )
+                feasible.append((score, required))
+    if not feasible:
+        raise XSyncError(
+            f"题库无法在 {count} 道题内同时覆盖 business 与 technical；请补充或调整 prerequisite"
+        )
+    selected_ids = min(feasible, key=lambda item: item[0])[1]
+    while len(selected_ids) < count:
+        choice = next((question for question in questions
+                       if question["id"] not in selected_ids
+                       and set(question.get("prerequisite_question_ids", [])) <= selected_ids),
+                      None)
+        if choice is None:
+            raise XSyncError("题库 prerequisite 无法形成可用的会话顺序")
+        selected_ids.add(choice["id"])
+    return [question for question in questions if question["id"] in selected_ids]
+
+
 def start_session(store: Store, bank_id: str, style: str, channel: str,
                   count: int | None = None, focus: str = "mixed",
                   max_depth: int | None = None, task_scope: str | None = None) -> dict:
@@ -1075,14 +1164,11 @@ def start_session(store: Store, bank_id: str, style: str, channel: str,
     questions = prioritize_questions(store, questions)
     if not questions:
         raise XSyncError("题库中的知识点都处于 disputed 状态；请先复核题库")
+    questions = select_session_questions(questions, count, focus)
     bank = {**bank, "questions": questions}
     sid = uuid.uuid4().hex
     directory = store.session_dir(sid)
     now = utc_now()
-    if count is not None:
-        if count < 1:
-            raise XSyncError("--count 必须为正整数")
-        bank = {**bank, "questions": bank["questions"][:count]}
     config = {"schema_version": SCHEMA_VERSION, "session_id": sid,
               "learner": store.learner, "bank_id": bank_id,
               "repo_id": repo_id(store.repo), "baseline_commit": bank.get("baseline_commit"),
@@ -1839,6 +1925,7 @@ def learner_status(store: Store) -> dict:
     summary = {
         "learner": store.learner, "repository": str(store.repo),
         "profile_exists": isinstance(profile, dict), "active_session": None,
+        "bank_ids": sorted(path.stem for path in (store.project / "banks").glob("*.json")),
         "reviewed_questions": len(mastery.get("reviews", [])) if isinstance(mastery, dict) else 0,
         "due_question_ids": mastery.get("due_question_ids", []) if isinstance(mastery, dict) else [],
     }
@@ -2807,7 +2894,9 @@ class QuizHandler(http.server.BaseHTTPRequestHandler):
 def serve(store: Store, session: str | None, host: str, port: int, open_page: bool) -> None:
     if host not in {"127.0.0.1", "::1", "localhost"}:
         raise XSyncError("serve 仅允许绑定 loopback 地址")
-    sid, _, _, _, _ = session_data(store, session)
+    sid, _, config, _, _ = session_data(store, session)
+    if config.get("channel") != "web":
+        raise XSyncError("该会话配置为 terminal；请在 Agent 终端继续或明确开始新的 web 会话")
     html_path = Path(__file__).resolve().parent.parent / "assets" / "quiz.html"
     if not html_path.is_file():
         raise XSyncError(f"HTML 资源缺失: {html_path}；请重新安装完整 x-sync skill")
@@ -2877,11 +2966,11 @@ def parser() -> argparse.ArgumentParser:
     validate = bsub.add_parser("validate"); repo_arg(validate); validate.add_argument("--file", required=True); json_arg(validate)
     install = bsub.add_parser("install"); learner_args(install, False); install.add_argument("--file", required=True); json_arg(install)
     start = sub.add_parser("start"); learner_args(start, False); start.add_argument("--bank", required=True)
-    start.add_argument("--style", choices=["regular", "socratic"], default="regular")
-    start.add_argument("--channel", choices=["terminal", "web"], default="terminal")
-    start.add_argument("--focus", choices=["business", "technical", "mixed"], default="mixed")
+    start.add_argument("--style", choices=["regular", "socratic"], default=DEFAULT_STYLE)
+    start.add_argument("--channel", choices=["terminal", "web"], default=DEFAULT_CHANNEL)
+    start.add_argument("--focus", choices=["business", "technical", "mixed"], default=DEFAULT_FOCUS)
     start.add_argument("--max-depth", type=int); start.add_argument("--task")
-    start.add_argument("--count", type=int); json_arg(start)
+    start.add_argument("--count", type=int, default=DEFAULT_QUESTION_COUNT); json_arg(start)
     question = sub.add_parser("question"); learner_args(question); json_arg(question)
     answer = sub.add_parser("answer"); learner_args(answer); answer.add_argument("--choice"); answer.add_argument("--text")
     answer.add_argument("--attempt-id"); answer.add_argument("--state-version", type=int)
@@ -2915,6 +3004,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "doctor":
             result = {"ok": True, "python": sys.version.split()[0], "repo": str(repo),
                       "repo_id": repo_id(repo),
+                      "default_learner": default_learner(),
                       "head_commit": git(repo, "rev-parse", "HEAD", check=False) or None,
                       "working_tree": working_tree_state(repo),
                       "git": bool(shutil.which("git")), "stdlib_only": True}
