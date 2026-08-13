@@ -1,0 +1,654 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>大脑与大模型的同步，始于你与代码的同步</title>
+  <style>:root {
+  color: #18201d;
+  background: #f4f2ec;
+  font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    "PingFang SC", "Microsoft YaHei", sans-serif;
+  line-height: 1.72;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+.page {
+  width: min(920px, calc(100% - 32px));
+  margin: 34px auto;
+  padding: clamp(30px, 7vw, 76px);
+  background: #fffdf8;
+  border: 1px solid #deddd4;
+  border-radius: 18px;
+  box-shadow: 0 18px 60px rgba(30, 39, 35, 0.09);
+}
+
+.cover {
+  margin: calc(-1 * clamp(30px, 7vw, 76px));
+  margin-bottom: 60px;
+  padding: clamp(34px, 7vw, 76px);
+  color: #f7fff9;
+  background: linear-gradient(118deg, #063a30, #0b6b57);
+  border-radius: 18px 18px 0 0;
+}
+
+.cover p {
+  max-width: 720px;
+  color: rgba(247, 255, 249, 0.78);
+}
+
+.eyebrow {
+  margin: 0 0 10px;
+  font-size: 0.73rem;
+  font-weight: 780;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-family: Charter, "Iowan Old Style", "Songti SC", serif;
+  line-height: 1.2;
+}
+
+h1 {
+  max-width: 780px;
+  margin: 0;
+  font-size: clamp(2.1rem, 5vw, 4rem);
+  letter-spacing: -0.035em;
+}
+
+.doc-section {
+  margin-top: 52px;
+}
+
+.doc-section .doc-section {
+  margin-top: 40px;
+  padding-left: 24px;
+  border-left: 2px solid #e5e3da;
+}
+
+h2 {
+  margin: 0 0 20px;
+  font-size: clamp(1.7rem, 3.6vw, 2.45rem);
+}
+
+h3 {
+  margin: 0 0 16px;
+  font-size: 1.55rem;
+}
+
+h4,
+h5,
+h6 {
+  margin: 0 0 14px;
+  font-size: 1.18rem;
+}
+
+p {
+  margin: 0 0 1.08em;
+}
+
+a {
+  color: #075343;
+  text-underline-offset: 0.18em;
+}
+
+blockquote {
+  margin: 1.4em 0;
+  padding-left: 1.1em;
+  color: #4d5c56;
+  border-left: 4px solid #9dc8b8;
+}
+
+pre {
+  max-width: 100%;
+  padding: 17px 18px;
+  overflow: auto;
+  color: #eefaf4;
+  background: #13241e;
+  border-radius: 12px;
+  line-height: 1.55;
+}
+
+code {
+  padding: 0.12em 0.34em;
+  color: #8a3f25;
+  background: #f6e9df;
+  border-radius: 5px;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 0.88em;
+}
+
+pre code {
+  padding: 0;
+  color: inherit;
+  background: transparent;
+}
+
+.syntax-keyword {
+  color: #ff9daf;
+  font-weight: 650;
+}
+
+.syntax-type {
+  color: #83d6ff;
+}
+
+.syntax-function,
+.syntax-number {
+  color: #ffe08a;
+}
+
+.syntax-string {
+  color: #b8e994;
+}
+
+.syntax-comment {
+  color: #9fb2aa;
+  font-style: italic;
+}
+
+.syntax-annotation {
+  color: #d5b0ff;
+}
+
+.syntax-literal {
+  color: #f6c177;
+}
+
+table {
+  width: 100%;
+  margin: 1.4em 0;
+  border-collapse: collapse;
+}
+
+.table-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+th,
+td {
+  padding: 10px 12px;
+  text-align: left;
+  vertical-align: top;
+  border: 1px solid #dcdcd2;
+  overflow-wrap: anywhere;
+}
+
+th {
+  background: #edf3ef;
+}
+
+img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 1.6em auto;
+  border: 1px solid #dcdcd2;
+  border-radius: 12px;
+}
+
+hr {
+  margin: 2.5em 0;
+  border: 0;
+  border-top: 1px solid #dcdcd2;
+}
+
+.footer {
+  margin-top: 64px;
+  padding-top: 18px;
+  color: #66706b;
+  border-top: 1px solid #dcdcd2;
+  font-size: 0.78rem;
+}
+
+@media print {
+  :root {
+    background: #fff;
+  }
+
+  .page {
+    width: auto;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    box-shadow: none;
+  }
+
+  .cover {
+    margin: 0 0 44px;
+    border-radius: 0;
+  }
+}
+</style>
+</head>
+<body>
+  <main class="page">
+    <header class="cover">
+      <p class="eyebrow">KUNKUN · LEARNING NOTE</p>
+      <h1>大脑与大模型的同步，始于你与代码的同步</h1>
+      <p>整合目录中的八篇心得：在 Loop Engineering 与 Coding Agents 普及后，工程师对需求、代码仓库、技术栈和交付系统的理解是否仍然与真实系统同步；校正信息论类比，并提出可测量的人—仓同步剖面与 Agent 自主权边界。</p>
+    </header>
+    <p><em>Loop Engineering 时代，写代码更快以后，更要理解自己交付的系统</em></p>
+<blockquote><p>当代码生成越来越便宜，真正稀缺的可能不再是“把代码写出来”的能力，而是：你是否仍然理解自己正在交付的系统。</p></blockquote>
+    <section class="doc-section doc-section--level-2" id="sec_4475c44479d24b5daca816b4970b5606" data-kunkun-section="sec_4475c44479d24b5daca816b4970b5606" data-level="2" data-title="Loop Engineering 降低实现成本，却没有消除理解门槛" aria-labelledby="heading-sec_4475c44479d24b5daca816b4970b5606">
+<h2 id="heading-sec_4475c44479d24b5daca816b4970b5606">Loop Engineering 降低实现成本，却没有消除理解门槛</h2>
+<p>Loop Engineering 可以理解为把大模型放进一个能够读取代码、调用工具、修改文件、运行测试、观察结果并继续迭代的闭环。Agent、Skill、Harness、测试环境和反馈机制，都是这条闭环的一部分。它比一次性的 prompt 更接近真实的软件工程，也确实能显著提高交付速度。</p>
+<p>但工具变好之后，一个容易被忽略的问题浮现出来了：<strong>好的 Agent Skill，是否足以让一个缺乏主动理解和验证习惯的工程师，稳定产出与优秀工程师同等水准的系统？</strong></p>
+<p>现有证据支持一个有限结论：AI 可以帮助经验较少的工程师更快完成局部任务，却不会自动让所有人同样擅长理解架构、选择技术和检查结果。已有大规模现场实验显示，经验较少的开发者同样可以从生成式 AI 中获得明显的短期生产率提升；因此，简单断言“普通工程师不可能追上”并不严谨。<a href="https://pubsonline.informs.org/doi/10.1287/mnsc.2025.00535" target="_blank" rel="noopener noreferrer">一项覆盖 4,867 名开发者的现场实验</a>支持的是“AI 普遍有帮助”，而不是“AI 已经消除了能力差异”。</p>
+<p>另一面的证据也值得警惕。Anthropic 对实际 Coding Agent 会话的观察发现，任务相关专业度越高，会话越可能成功；不过该研究基于会话分类器，并没有直接观察生产结果，只能算相关性证据。<a href="https://www.anthropic.com/research/claude-code-expertise" target="_blank" rel="noopener noreferrer">How Claude Code is used in practice</a> 一项只有 52 名参与者的小型随机实验还发现，使用 AI 完成陌生库的开发任务后，参与者的即时掌握度低于手写组，差距尤其集中在调试；主动要求解释、用 AI 帮助理解的人则表现得更好。<a href="https://www.anthropic.com/research/AI-assistance-coding-skills" target="_blank" rel="noopener noreferrer">How AI assistance impacts the formation of coding skills</a></p>
+<p>这几项结果放在一起，得出的不是“不要使用 AI”，而是一个更细的结论：</p>
+<blockquote><p>AI 能替你完成越来越多的实现动作，但“代码已经完成”和“你已经理解系统”仍然是两件不同的事。</p></blockquote>
+</section>
+<section class="doc-section doc-section--level-2" id="sec_64e3c0680f454398ad034c2e2e828924" data-kunkun-section="sec_64e3c0680f454398ad034c2e2e828924" data-level="2" data-title="从 Vibe Coding 的甜蜜期到失控期" aria-labelledby="heading-sec_64e3c0680f454398ad034c2e2e828924">
+<h2 id="heading-sec_64e3c0680f454398ad034c2e2e828924">从 Vibe Coding 的甜蜜期到失控期</h2>
+<p>Vibe Coding 在项目早期往往非常顺滑。代码库近乎空白，架构约束少，需求大部分还在人的脑中。此时，一条 prompt 可能同时定义需求、技术方案和代码形态；模型的常见模式也足以覆盖大多数问题。</p>
+<p>随着项目增长，情况会发生变化：</p>
+<ul>
+<li>需求有了历史，今天的指令可能与三个月前的业务决定相冲突；</li>
+<li>代码有了隐含约束，一个看似多余的分支可能承担幂等、权限或兼容责任；</li>
+<li>Redis、MySQL、Caffeine、Seata、Elasticsearch、Spark、Flink 等技术逐渐进入系统，每一种技术都带来自己的状态、边界、失败模式和运维要求；</li>
+<li>一个局部改动可能穿过缓存、事务、消息、索引和下游消费者；</li>
+<li>文档、代码、测试和线上行为甚至可能互相矛盾。</li>
+</ul>
+<p>这时，人可能已经忘记需求的前因后果，也未必理解所有技术的运行机制。如果工程师对系统的理解本来就是错的，那么 prompt 写得越清楚，大模型反而可能越高效地执行错误决定。</p>
+<p>可以把这种现象称为<strong>理解债务</strong>：代码和系统已经变了，人脑里的系统地图却没有跟着更新。它不像技术债那样一定能在代码里被搜索出来，最初只表现为无法解释某段逻辑、不能预测影响范围，或者不断发出彼此冲突的需求。当生成代码的速度超过人理解变化的速度，理解债务就会越积越多。</p>
+<p>一个典型的错误方案，是让前端直接连接 Elasticsearch 做检索。在极少数经过专门安全设计的环境中，浏览器访问搜索服务并非逻辑上绝对不可能；但在多数生产架构里，这会绕过服务端鉴权和业务边界，暴露存储拓扑，并把客户端与索引结构直接绑在一起。这个例子真正暴露的不是“不会调用 ES”，而是不清楚请求应当怎样经过前端、服务层和数据系统，也没有意识到其中的安全边界。</p>
+<p>因此，代码规模变大后觉得“模型越来越蠢”，可能包含三种不同现象：</p>
+<ol>
+<li>模型确实没有取到完成当前任务所需的代码和证据；</li>
+<li>人已经与需求或代码现状失去同步，向模型发出了矛盾或错误的指令；</li>
+<li>人和模型都理解错了，却因为两边意见一致而误以为结果可靠。</li>
+</ol>
+<p>第三种最危险：<strong>你和 AI 可以完全对齐，但共同对齐在一个错误认识上。</strong></p>
+</section>
+<section class="doc-section doc-section--level-2" id="sec_3fc949bc044c4d44a0426b1cdd816cf0" data-kunkun-section="sec_3fc949bc044c4d44a0426b1cdd816cf0" data-level="2" data-title="工程师、Agent 和代码必须对得上" aria-labelledby="heading-sec_3fc949bc044c4d44a0426b1cdd816cf0">
+<h2 id="heading-sec_3fc949bc044c4d44a0426b1cdd816cf0">工程师、Agent 和代码必须对得上</h2>
+<p>一个工程任务里有三个角色：</p>
+<ul>
+<li><strong>System（代码与交付系统）</strong>：当前的需求、代码、配置、数据和线上运行方式；</li>
+<li><strong>Engineer（工程师）</strong>：理解需求、做技术判断并检查交付结果的人；</li>
+<li><strong>Agent（大模型）</strong>：根据 prompt、读到的代码和工具结果完成任务的执行者。</li>
+</ul>
+<p>三方同步，不是要求工程师背下整个仓库，而是要求三方对当前任务的几个关键问题有一致认识：系统现在怎么运行、这次要改什么、哪些规则不能破坏，以及怎样证明改动真的正确。</p>
+<p><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMjAwIDY1MCIgcm9sZT0iaW1nIiBhcmlhLWxhYmVsbGVkYnk9InRpdGxlIGRlc2MiPgogIDx0aXRsZSBpZD0idGl0bGUiPuW3peeoi+W4iOOAgUFnZW50IOWSjOS7o+eggeS4juS6pOS7mOezu+e7n+W/hemhu+S/neaMgeWQjOatpTwvdGl0bGU+CiAgPGRlc2MgaWQ9ImRlc2MiPuW3peeoi+W4iOS4jiBBZ2VudCDopoHmiorku7vliqHor7TmuIXmpZrvvIzlt6XnqIvluIjopoHnkIbop6Plubbmo4Dmn6Xku6PnoIHvvIxBZ2VudCDopoHor7vlj5bjgIHkv67mlLnlkozmtYvor5Xku6PnoIHjgII8L2Rlc2M+CiAgPGRlZnM+CiAgICA8ZmlsdGVyIGlkPSJzaGFkb3ciIHg9Ii0yMCUiIHk9Ii0yMCUiIHdpZHRoPSIxNDAlIiBoZWlnaHQ9IjE0MCUiPgogICAgICA8ZmVEcm9wU2hhZG93IGR4PSIwIiBkeT0iNiIgc3RkRGV2aWF0aW9uPSI4IiBmbG9vZC1jb2xvcj0iIzBmMTcyYSIgZmxvb2Qtb3BhY2l0eT0iMC4xMiIvPgogICAgPC9maWx0ZXI+CiAgICA8bWFya2VyIGlkPSJhcnJvdyIgdmlld0JveD0iMCAwIDEwIDEwIiByZWZYPSI5IiByZWZZPSI1IiBtYXJrZXJXaWR0aD0iNyIgbWFya2VySGVpZ2h0PSI3IiBvcmllbnQ9ImF1dG8tc3RhcnQtcmV2ZXJzZSI+CiAgICAgIDxwYXRoIGQ9Ik0gMCAwIEwgMTAgNSBMIDAgMTAgeiIgZmlsbD0iIzQ3NTU2OSIvPgogICAgPC9tYXJrZXI+CiAgPC9kZWZzPgoKICA8cmVjdCB3aWR0aD0iMTIwMCIgaGVpZ2h0PSI2NTAiIHJ4PSIyOCIgZmlsbD0iI2Y4ZmFmYyIvPgogIDx0ZXh0IHg9IjYwMCIgeT0iNTgiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtZmFtaWx5PSItYXBwbGUtc3lzdGVtLCBCbGlua01hY1N5c3RlbUZvbnQsICdTZWdvZSBVSScsIHNhbnMtc2VyaWYiIGZvbnQtc2l6ZT0iMzIiIGZvbnQtd2VpZ2h0PSI3MDAiIGZpbGw9IiMwZjE3MmEiPuW3peeoi+W4iOOAgUFnZW50IOWSjOS7o+eggeW/hemhu+WvueW+l+S4ijwvdGV4dD4KICA8dGV4dCB4PSI2MDAiIHk9Ijk1IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LWZhbWlseT0iLWFwcGxlLXN5c3RlbSwgQmxpbmtNYWNTeXN0ZW1Gb250LCAnU2Vnb2UgVUknLCBzYW5zLXNlcmlmIiBmb250LXNpemU9IjE5IiBmaWxsPSIjNDc1NTY5Ij7ku7vkvZXkuIDovrnmsqHlr7nkuIrvvIzplJnor6/pg73lj6/og73ooqvmm7Tlv6vmlL7lpKc8L3RleHQ+CgogIDxwYXRoIGQ9Ik0gMzgwIDIyMCBMIDgyMCAyMjAiIHN0cm9rZT0iIzQ3NTU2OSIgc3Ryb2tlLXdpZHRoPSI0IiBmaWxsPSJub25lIiBtYXJrZXItc3RhcnQ9InVybCgjYXJyb3cpIiBtYXJrZXItZW5kPSJ1cmwoI2Fycm93KSIvPgogIDxwYXRoIGQ9Ik0gMzEwIDMxMCBMIDUwMCA0NTUiIHN0cm9rZT0iIzQ3NTU2OSIgc3Ryb2tlLXdpZHRoPSI0IiBmaWxsPSJub25lIiBtYXJrZXItc3RhcnQ9InVybCgjYXJyb3cpIiBtYXJrZXItZW5kPSJ1cmwoI2Fycm93KSIvPgogIDxwYXRoIGQ9Ik0gODkwIDMxMCBMIDcwMCA0NTUiIHN0cm9rZT0iIzQ3NTU2OSIgc3Ryb2tlLXdpZHRoPSI0IiBmaWxsPSJub25lIiBtYXJrZXItc3RhcnQ9InVybCgjYXJyb3cpIiBtYXJrZXItZW5kPSJ1cmwoI2Fycm93KSIvPgoKICA8ZyBmaWx0ZXI9InVybCgjc2hhZG93KSI+CiAgICA8cmVjdCB4PSIxMDAiIHk9IjE0NSIgd2lkdGg9IjMwMCIgaGVpZ2h0PSIxNjUiIHJ4PSIyMiIgZmlsbD0iI2VjZmRmNSIgc3Ryb2tlPSIjMDU5NjY5IiBzdHJva2Utd2lkdGg9IjMiLz4KICAgIDxyZWN0IHg9IjgwMCIgeT0iMTQ1IiB3aWR0aD0iMzAwIiBoZWlnaHQ9IjE2NSIgcng9IjIyIiBmaWxsPSIjZjVmM2ZmIiBzdHJva2U9IiM3YzNhZWQiIHN0cm9rZS13aWR0aD0iMyIvPgogICAgPHJlY3QgeD0iNDEwIiB5PSI0MzUiIHdpZHRoPSIzODAiIGhlaWdodD0iMTY1IiByeD0iMjIiIGZpbGw9IiNlZmY2ZmYiIHN0cm9rZT0iIzI1NjNlYiIgc3Ryb2tlLXdpZHRoPSIzIi8+CiAgPC9nPgoKICA8dGV4dCB4PSIyNTAiIHk9IjIwNSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1mYW1pbHk9Ii1hcHBsZS1zeXN0ZW0sIEJsaW5rTWFjU3lzdGVtRm9udCwgJ1NlZ29lIFVJJywgc2Fucy1zZXJpZiIgZm9udC1zaXplPSIyOSIgZm9udC13ZWlnaHQ9IjcwMCIgZmlsbD0iIzA2NWY0NiI+5bel56iL5biIPC90ZXh0PgogIDx0ZXh0IHg9IjI1MCIgeT0iMjQ1IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LWZhbWlseT0iLWFwcGxlLXN5c3RlbSwgQmxpbmtNYWNTeXN0ZW1Gb250LCAnU2Vnb2UgVUknLCBzYW5zLXNlcmlmIiBmb250LXNpemU9IjE4IiBmaWxsPSIjMzM0MTU1Ij7nkIbop6Pns7vnu588L3RleHQ+CiAgPHRleHQgeD0iMjUwIiB5PSIyNzUiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtZmFtaWx5PSItYXBwbGUtc3lzdGVtLCBCbGlua01hY1N5c3RlbUZvbnQsICdTZWdvZSBVSScsIHNhbnMtc2VyaWYiIGZvbnQtc2l6ZT0iMTgiIGZpbGw9IiMzMzQxNTUiPuWBmuWIpOaWreOAgeajgOafpee7k+aenDwvdGV4dD4KCiAgPHRleHQgeD0iOTUwIiB5PSIyMDUiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtZmFtaWx5PSItYXBwbGUtc3lzdGVtLCBCbGlua01hY1N5c3RlbUZvbnQsICdTZWdvZSBVSScsIHNhbnMtc2VyaWYiIGZvbnQtc2l6ZT0iMjkiIGZvbnQtd2VpZ2h0PSI3MDAiIGZpbGw9IiM2ZDI4ZDkiPkFnZW5077yI5aSn5qih5Z6L77yJPC90ZXh0PgogIDx0ZXh0IHg9Ijk1MCIgeT0iMjQ1IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LWZhbWlseT0iLWFwcGxlLXN5c3RlbSwgQmxpbmtNYWNTeXN0ZW1Gb250LCAnU2Vnb2UgVUknLCBzYW5zLXNlcmlmIiBmb250LXNpemU9IjE4IiBmaWxsPSIjMzM0MTU1Ij7or7vlj5bnm7jlhbPmnZDmlpk8L3RleHQ+CiAgPHRleHQgeD0iOTUwIiB5PSIyNzUiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtZmFtaWx5PSItYXBwbGUtc3lzdGVtLCBCbGlua01hY1N5c3RlbUZvbnQsICdTZWdvZSBVSScsIHNhbnMtc2VyaWYiIGZvbnQtc2l6ZT0iMTgiIGZpbGw9IiMzMzQxNTUiPuWGmeS7o+eggeOAgei3keW3peWFtzwvdGV4dD4KCiAgPHRleHQgeD0iNjAwIiB5PSI0OTUiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtZmFtaWx5PSItYXBwbGUtc3lzdGVtLCBCbGlua01hY1N5c3RlbUZvbnQsICdTZWdvZSBVSScsIHNhbnMtc2VyaWYiIGZvbnQtc2l6ZT0iMjgiIGZvbnQtd2VpZ2h0PSI3MDAiIGZpbGw9IiMxZTQwYWYiPuS7o+eggeS4juS6pOS7mOezu+e7nzwvdGV4dD4KICA8dGV4dCB4PSI2MDAiIHk9IjUzNSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1mYW1pbHk9Ii1hcHBsZS1zeXN0ZW0sIEJsaW5rTWFjU3lzdGVtRm9udCwgJ1NlZ29lIFVJJywgc2Fucy1zZXJpZiIgZm9udC1zaXplPSIxOCIgZmlsbD0iIzMzNDE1NSI+5Luj56CB44CB6YWN572u44CB5pWw5o2uPC90ZXh0PgogIDx0ZXh0IHg9IjYwMCIgeT0iNTY1IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LWZhbWlseT0iLWFwcGxlLXN5c3RlbSwgQmxpbmtNYWNTeXN0ZW1Gb250LCAnU2Vnb2UgVUknLCBzYW5zLXNlcmlmIiBmb250LXNpemU9IjE4IiBmaWxsPSIjMzM0MTU1Ij7ku6Xlj4rnur/kuIrlrp7pmYXov5DooYznu5Pmnpw8L3RleHQ+CgogIDxyZWN0IHg9IjQ2MCIgeT0iMTc1IiB3aWR0aD0iMjgwIiBoZWlnaHQ9IjUyIiByeD0iMTYiIGZpbGw9IiNmZmZmZmYiIHN0cm9rZT0iI2NiZDVlMSIgc3Ryb2tlLXdpZHRoPSIyIi8+CiAgPHRleHQgeD0iNjAwIiB5PSIyMDgiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtZmFtaWx5PSItYXBwbGUtc3lzdGVtLCBCbGlua01hY1N5c3RlbUZvbnQsICdTZWdvZSBVSScsIHNhbnMtc2VyaWYiIGZvbnQtc2l6ZT0iMTgiIGZvbnQtd2VpZ2h0PSI2NTAiIGZpbGw9IiMzMzQxNTUiPuaKiuS7u+WKoeivtOa4healmjwvdGV4dD4KCiAgPHJlY3QgeD0iMjI1IiB5PSIzNjAiIHdpZHRoPSIyNDUiIGhlaWdodD0iNTIiIHJ4PSIxNiIgZmlsbD0iI2ZmZmZmZiIgc3Ryb2tlPSIjY2JkNWUxIiBzdHJva2Utd2lkdGg9IjIiLz4KICA8dGV4dCB4PSIzNDciIHk9IjM5MyIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1mYW1pbHk9Ii1hcHBsZS1zeXN0ZW0sIEJsaW5rTWFjU3lzdGVtRm9udCwgJ1NlZ29lIFVJJywgc2Fucy1zZXJpZiIgZm9udC1zaXplPSIxNyIgZm9udC13ZWlnaHQ9IjY1MCIgZmlsbD0iIzMzNDE1NSI+55yL5oeC546w54q277yM5qOA5p+l57uT5p6cPC90ZXh0PgoKICA8cmVjdCB4PSI3MzAiIHk9IjM2MCIgd2lkdGg9IjI0NSIgaGVpZ2h0PSI1MiIgcng9IjE2IiBmaWxsPSIjZmZmZmZmIiBzdHJva2U9IiNjYmQ1ZTEiIHN0cm9rZS13aWR0aD0iMiIvPgogIDx0ZXh0IHg9Ijg1MiIgeT0iMzkzIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LWZhbWlseT0iLWFwcGxlLXN5c3RlbSwgQmxpbmtNYWNTeXN0ZW1Gb250LCAnU2Vnb2UgVUknLCBzYW5zLXNlcmlmIiBmb250LXNpemU9IjE3IiBmb250LXdlaWdodD0iNjUwIiBmaWxsPSIjMzM0MTU1Ij7or7vlj5bjgIHkv67mlLnjgIHmtYvor5U8L3RleHQ+Cjwvc3ZnPgo=" alt="工程师、Agent 与代码和交付系统必须保持同步" loading="lazy"></p>
+<p>三条边缺一不可：</p>
+<div class="table-wrap"><table><thead><tr>
+<th scope="col">哪两方要对上</th>
+<th scope="col">要回答的白话问题</th>
+<th scope="col">常见做法</th>
+</tr></thead><tbody>
+<tr>
+<td>工程师 ↔ 代码</td>
+<td>工程师是否真的知道系统现在怎么跑？</td>
+<td>读代码、回看需求、跑 trace、询问模块负责人</td>
+</tr>
+<tr>
+<td>Agent ↔ 代码</td>
+<td>Agent 是否读过相关文件，并用测试确认过结果？</td>
+<td>搜索代码、调用工具、跑测试、看日志</td>
+</tr>
+<tr>
+<td>工程师 ↔ Agent</td>
+<td>任务有没有说清楚，做错时是否知道停下来？</td>
+<td>写清目标、非目标、验收标准和停止条件</td>
+</tr>
+</tbody></table></div>
+<p>这也解释了为什么“把整个仓库塞进上下文”不是根治方案。长上下文实验表明，模型能接收某个长度，不等于能稳定使用其中每条信息；相关内容的位置、语义关联和输入长度本身都可能影响表现。<a href="https://arxiv.org/abs/2307.03172" target="_blank" rel="noopener noreferrer">Lost in the Middle</a>、<a href="https://proceedings.mlr.press/v267/modarressi25a.html" target="_blank" rel="noopener noreferrer">NoLiMa</a> 以及一项控制了检索质量的 <a href="https://aclanthology.org/2025.findings-emnlp.1264/" target="_blank" rel="noopener noreferrer">EMNLP 2025 研究</a>都从不同角度说明了这个问题。</p>
+<p>真正需要做的不是一味增加 token，而是每一步都给 Agent 提供少量但相关、最新、能够通过测试或运行结果核对的事实。</p>
+</section>
+<section class="doc-section doc-section--level-2" id="sec_e0321dd746b64359aab36b1615533bb9" data-kunkun-section="sec_e0321dd746b64359aab36b1615533bb9" data-level="2" data-title="信息论可以借，但必须知道借的是什么" aria-labelledby="heading-sec_e0321dd746b64359aab36b1615533bb9">
+<h2 id="heading-sec_e0321dd746b64359aab36b1615533bb9">信息论可以借，但必须知道借的是什么</h2>
+<p>“信息量、熵、信道、带宽、噪声、信息差”等概念很有解释力，但如果把它们当成严格的信息论结论，就会产生误导。</p>
+<p><a href="https://people.math.harvard.edu/~ctm/home/text/others/shannon/entropy/entropy.pdf" target="_blank" rel="noopener noreferrer">Shannon 1948 年的原始论文</a>研究的是符号如何在给定信道中可靠传输，并且主动把语义问题放在通信工程问题之外。工程实践关心的却恰恰是语义：工程师和 Agent 是否理解了正确的业务含义、系统边界与因果关系。因此，更合适的做法是把信息论当成受约束的类比，而不是证明。</p>
+<p>信息论当然深刻影响了机器学习：熵、交叉熵、KL 散度等概念已经用于训练和分析模型。可是，一个理论推动了 AI 的发展，并不意味着所有“人不理解代码”的问题都能被直接叫作 Shannon 熵。大模型根据概率预测后续 token，也不能单独证明“它无法推理”或“它不能成为 Agent”。更直接的工程问题是：模型一开始并不知道项目现在是什么样，生成的代码也不会自动保证正确。</p>
+<div class="table-wrap"><table><thead><tr>
+<th scope="col">术语</th>
+<th scope="col">严格含义</th>
+<th scope="col">在工程讨论中的安全用法</th>
+</tr></thead><tbody>
+<tr>
+<td>信息量</td>
+<td>某件事发生得越意外，带来的信息越多</td>
+<td>不要说“人有 101、项目有 100”，改说“当前任务需要哪些知识”</td>
+</tr>
+<tr>
+<td>熵</td>
+<td>对一组可能结果有多不确定</td>
+<td>代码行数多不等于熵大，可以直接说“还不知道多少关键事实”</td>
+</tr>
+<tr>
+<td>信道容量</td>
+<td>一条信道最多能可靠传多少数据</td>
+<td>Context Window 很长，不等于模型能稳定用好全部内容</td>
+</tr>
+<tr>
+<td>噪声</td>
+<td>信号在传输过程中受到的干扰</td>
+<td>过期文档、矛盾需求可以直接叫“错误或冲突的上下文”</td>
+</tr>
+<tr>
+<td>互信息</td>
+<td>两组数据共享了多少统计信息</td>
+<td>没有明确数据和计算方法，就不要声称测出了“人仓互信息”</td>
+</tr>
+<tr>
+<td>反馈</td>
+<td>把结果送回去，帮助下一步调整</td>
+<td>测试和日志能帮助纠错，但不要把它说成自动扩大信道容量</td>
+</tr>
+<tr>
+<td>信息势能</td>
+<td>不是标准信息论概念</td>
+<td>改说“知识差距”“理解偏差”更清楚</td>
+</tr>
+</tbody></table></div>
+<p>这里还有两个容易忽略的细节。第一，更多输入未必带来更多有效信息；无关或过期内容可能增加推理负担。第二，重复不一定是噪声；把权限、事务、兼容性这类关键规则用固定格式再写一遍，有时反而能帮助纠错。</p>
+<section class="doc-section doc-section--level-3" id="sec_2d6a51670f77471a8e9d4b4816f6c9ac" data-kunkun-section="sec_2d6a51670f77471a8e9d4b4816f6c9ac" data-level="3" data-title="为什么“率失真”最值得借用" aria-labelledby="heading-sec_2d6a51670f77471a8e9d4b4816f6c9ac">
+<h3 id="heading-sec_2d6a51670f77471a8e9d4b4816f6c9ac">为什么“率失真”最值得借用</h3>
+<p><a href="https://ieeexplore.ieee.org/document/5311476" target="_blank" rel="noopener noreferrer">率失真理论</a>原本研究有损压缩：当我们不要求把原始信息一模一样地还原时，最少要用多少数据，才能把误差控制在可接受范围内？它包含三个关键部分：</p>
+<ul>
+<li><strong>Rate（码率）</strong>：平均要用多少 bit 表示一个来源符号。码率越低，通常意味着压缩得越狠；</li>
+<li><strong>Distortion（失真）</strong>：原始内容与还原内容之间的损失。它不是一个天然固定的数，必须先规定“哪一种错误有多严重”；</li>
+<li><strong>Rate–Distortion Function，<code>R(D)</code></strong>：在平均失真不超过 <code>D</code> 的条件下，理论上至少需要多高的码率。允许的失真越大，所需的最低码率通常越低。</li>
+</ul>
+<p>最重要的不是公式，而是<strong>必须先定义失真的代价</strong>。压缩一张普通照片时，少量像素偏差也许可以接受；压缩一张包含合同文字的扫描件时，让数字和文字变得不可辨认就不能接受。同样一种信息损失，在不同用途下可能有完全不同的后果。<a href="https://ocw.mit.edu/courses/6-441-information-theory-spring-2016/resources/mit6_441s16_chapter_23/" target="_blank" rel="noopener noreferrer">MIT 6.441 的率失真课程笔记</a>给出了它的正式定义与推导。</p>
+<p>工程师脑中的“系统地图”可以看作这种思想的一个类比：人不可能把整个仓库逐字记住，只能保留一份经过取舍的理解。关键不在于记住多少，而在于这次任务最不能记错什么。</p>
+<p>例如，任务是“修复下单后 MySQL 与 Redis 数据不一致的问题”。这时，系统地图至少要保留：</p>
+<ul>
+<li>MySQL 和 Redis 谁是最终可信的数据来源；</li>
+<li>数据库事务在哪里开始和提交；</li>
+<li>缓存是在提交前还是提交后删除或更新；</li>
+<li>并发请求、失败重试和幂等逻辑怎样处理；</li>
+<li>用什么测试、日志和监控判断修复是否生效。</li>
+</ul>
+<p>与这次任务无关的后台页面颜色、报表排版或其他模块的类名，可以暂时不记。页面颜色与缓存一致性没有业务关系，它只是一个“当前任务可以安全忽略的细节”的例子。如果任务改成重做后台主题，页面颜色就会变成必须保留的信息；判断标准会随任务改变。</p>
+<p>因此，本文真正借用率失真的不是一条可以直接计算“人仓同步值”的公式，而是三个思考动作：</p>
+<ol>
+<li>承认人的系统理解一定是一份有损摘要，不追求背下整个仓库；</li>
+<li>先按当前任务定义哪些错误代价最高，再决定哪些细节可以忽略；</li>
+<li>把有限的注意力和 Agent 上下文优先留给高代价信息，例如安全边界、事务规则、数据所有权和失败恢复。</li>
+</ol>
+<p>这个类比还有一个安全边界：率失真理论通常约束平均失真，但工程风险不能全部取平均。一次权限绕过、资金错账或不可恢复的数据破坏，不能被一百个回答正确的低风险细节抵消；这类规则必须作为不可突破的硬约束单独检查。</p>
+<p>至于通过测试和日志发现遗漏、再修正理解，属于 Loop Engineering 的反馈过程，不是率失真理论本身。除非真的定义了信息来源、概率分布、编码方式和失真函数，否则这里始终只是受信息论启发的工程类比。</p>
+</section>
+</section>
+<section class="doc-section doc-section--level-2" id="sec_80e14754568943658083c722d61d4691" data-kunkun-section="sec_80e14754568943658083c722d61d4691" data-level="2" data-title="这更像控制问题：想改好系统，先得知道它怎么运作" aria-labelledby="heading-sec_80e14754568943658083c722d61d4691">
+<h2 id="heading-sec_80e14754568943658083c722d61d4691">这更像控制问题：想改好系统，先得知道它怎么运作</h2>
+<p>信息论有助于理解传递与不确定性，而控制论更接近这一问题的核心。</p>
+<p>Conant 与 Ashby 的“良好调节器定理”在特定数学前提下讨论了控制者与被控制系统之间的关系。<a href="https://doi.org/10.1080/00207727008920220" target="_blank" rel="noopener noreferrer">原论文</a>带来的工程启发可以转述为：</p>
+<blockquote><p>要可靠改变一个系统，操作者至少要准确理解与当前任务有关的那部分系统。</p></blockquote>
+<p>这不意味着人必须记住全部代码。Parnas 关于信息隐藏与模块化的经典工作说明，清楚的模块边界、接口和规则，可以把这次任务不需要知道的细节挡在外面。<a href="https://doi.org/10.1145/361598.361623" target="_blank" rel="noopener noreferrer">On the Criteria to Be Used in Decomposing Systems into Modules</a></p>
+<blockquote><p><strong>好架构的一个核心价值，就是让工程师改一个局部功能时不必理解整个系统。</strong></p></blockquote>
+<p>Peter Naur 在 1985 年提出“Programming as Theory Building”：编程的产物不只是代码，还包括程序员对“这个问题为什么要这样解决”的理解。<a href="https://doi.org/10.1016/0165-6074(85" target="_blank" rel="noopener noreferrer">原论文</a>90032-8) 放到 AI 编程时代，这个判断变得更尖锐：</p>
+<blockquote><p><strong>代码可以飞快增长，人对代码的理解却可能跟不上。</strong></p></blockquote>
+<p>所以，优秀工程师的优势不一定是记得更多类名和语法，而是他们通常更善于：</p>
+<ul>
+<li>能把一个请求从入口到数据落库的完整路径讲清楚，而不只看局部代码；</li>
+<li>知道数据归谁管理，以及事务、安全和兼容性等哪些规则不能破坏；</li>
+<li>理解项目所用框架和基础设施的工作原理，知道一个改动应该放在哪一层，而不只是会复制注解与配置；</li>
+<li>预测修改会穿过哪些模块、协议与运行状态；</li>
+<li>察觉自己不知道什么，并知道到哪里寻找证据；</li>
+<li>把复杂问题拆成范围清楚、可以分别测试的小任务；</li>
+<li>设计失败信号、测试、灰度与回滚，而不把“代码生成成功”当成交付成功。</li>
+</ul>
+<p>以 Spring Boot MVC 微服务为例，“熟悉技术栈”不只是会写 <code>@RestController</code>。工程师不必背下每一行框架源码，但至少应该能够解释一条请求的大致路径：</p>
+<blockquote><p>内嵌 Tomcat 接收并解析 HTTP 请求 → Servlet 容器完成映射并构造 <code>FilterChain</code> → Spring Security 检查请求 → <code>DispatcherServlet</code> 分发请求 → Controller 执行业务逻辑 → 结果写回响应</p></blockquote>
+<p>这条简图背后还有几个决定代码行为的细节。Servlet 容器的 FilterChain 通常包含 <code>DelegatingFilterProxy</code>，它把工作桥接给 Spring 管理的 <code>FilterChainProxy</code>；后者选择第一个匹配的 <code>SecurityFilterChain</code>，再按配置执行认证、授权、CSRF 等安全 Filter。任何一个 Filter 都可能直接返回 401 或 403，因此请求不一定能到达 Controller。只有安全检查通过后，请求才继续到 <code>DispatcherServlet</code>。<a href="https://docs.spring.io/spring-security/reference/servlet/architecture.html" target="_blank" rel="noopener noreferrer">Spring Security Servlet Architecture</a></p>
+<p><code>DispatcherServlet</code> 会向 <code>HandlerMapping</code> 询问该由谁处理，并取得相应的拦截器；随后由合适的 <code>HandlerAdapter</code> 调用这个处理者。在常见的注解式 MVC 中，具体实现会找到 <code>@Controller</code> 或 <code>@RestController</code> 方法；<code>@RestController</code> 的返回值通常再由 <code>HttpMessageConverter</code> 写成 JSON 等响应。<a href="https://docs.spring.io/spring-framework/reference/web/webmvc/mvc-servlet.html" target="_blank" rel="noopener noreferrer">Spring MVC DispatcherServlet</a>、<a href="https://docs.spring.io/spring-framework/reference/web/webmvc/mvc-servlet/sequence.html" target="_blank" rel="noopener noreferrer">DispatcherServlet Processing</a></p>
+<p>IoC、AOP 和自动配置则主要决定应用启动后“有哪些对象、它们怎样连接”，不是请求每经过一步就重新运行一次。<a href="https://docs.spring.io/spring-framework/reference/core/beans/introduction.html" target="_blank" rel="noopener noreferrer">IoC 容器</a>负责创建 Bean、注入依赖并管理生命周期；事务、方法安全和缓存等声明式能力常通过<a href="https://docs.spring.io/spring-framework/reference/core/aop/proxying.html" target="_blank" rel="noopener noreferrer">代理</a>实现；Spring Boot 的许多自动配置会在启动时根据 classpath、已有 Bean 和配置项装配默认实现，并在开发者提供相应 Bean 时让位。<a href="https://docs.spring.io/spring-boot/reference/using/auto-configuration.html" target="_blank" rel="noopener noreferrer">Spring Boot Auto-configuration</a></p>
+<p>框架内部也不是一堆需要死记的设计模式名词，而是一组解决具体问题的办法：<code>DispatcherServlet</code> 是统一入口的前端控制器；<code>HandlerMapping</code>、<code>HandlerAdapter</code> 和异常处理器等是可替换的策略；共享处理骨架提供固定流程和可覆盖的钩子；<code>BeanFactory</code> 与 <code>FactoryBean</code> 处理不同层次的对象创建；应用事件提供发布—监听机制；<code>AutoConfiguration.imports</code> 和其他类似 SPI 的发现机制加载可选能力；“约定优于配置”则给常见场景默认值，同时允许覆盖。</p>
+<p>这些知识会直接改变代码应该写在哪里。例如，401 没有进入 Controller，可能是安全 Filter 已经终止请求；在默认代理模式下，类内部自调用可能绕过 <code>@Transactional</code> 代理；自定义 Bean 可能让某项自动配置主动退出；REST 返回值通常由消息转换器处理，而不是必须经过视图解析。真正的技术栈理解，是能沿着请求链解释这些现象、定位证据并预测改动后果，而不是能背出所有 Filter 顺序或设计模式名称。</p>
+<section class="doc-section doc-section--level-3" id="sec_6f6120db880b43c1997f77f0d49a4610" data-kunkun-section="sec_6f6120db880b43c1997f77f0d49a4610" data-level="3" data-title="设计模式可以成为共享坐标，但不能只报模式名" aria-labelledby="heading-sec_6f6120db880b43c1997f77f0d49a4610">
+<h3 id="heading-sec_6f6120db880b43c1997f77f0d49a4610">设计模式可以成为共享坐标，但不能只报模式名</h3>
+<p>自然语言很适合说明“为什么要做”和“用户应该看到什么”，却未必能稳定表达系统由哪些部分组成、数据怎样流动、扩展点在哪里。设计模式和架构模式的价值，是用一个共同名称快速说明这套基本结构，也就是系统大致“长什么样”。</p>
+<p>例如，对 Agent 说“这是一个分阶段的 processor pipeline”，比只说“把这段复杂计算拆开”多传递了几项预期：计算由若干阶段组成，阶段遵守相似接口，数据按既定方向流动，新步骤应插在明确位置，每个阶段应当可以单独观察和测试。这个模式名像一张压缩过的地图，能让工程师、Agent 和代码更快找到共同坐标。</p>
+<p>但模式名只是起点。同一个“责任链”，有人会理解成“多个候选处理者中有一个接手后结束”，有人会理解成“所有处理器依次执行”，还有人会想到可以在调用 <code>next()</code> 前后包裹逻辑的中间件。线性的逐步数据转换通常更接近 <a href="https://www.enterpriseintegrationpatterns.com/docs/EnterpriseIntegrationPatterns_HohpeWoolf_ch03.pdf" target="_blank" rel="noopener noreferrer">Pipes and Filters</a>；出现分支、汇合、等待和补偿时，可能已经需要工作流、DAG 或状态机。只报一个模式名，反而可能造成“三方都以为已经对齐”的假象。</p>
+<p>真正稳定的共享语言至少有三层：</p>
+<div class="table-wrap"><table><thead><tr>
+<th scope="col">层次</th>
+<th scope="col">它解决什么问题</th>
+<th scope="col">还缺什么</th>
+</tr></thead><tbody>
+<tr>
+<td>模式名</td>
+<td>快速说明系统的基本形状和常见分工</td>
+<td>没说明项目采用了哪一种变体</td>
+</tr>
+<tr>
+<td>项目内契约</td>
+<td>写清拓扑、输入输出、顺序、状态、失败和整体规则</td>
+<td>文字可能过期，实现也可能绕开它</td>
+</tr>
+<tr>
+<td>可执行约束</td>
+<td>用类型、依赖检查、契约测试、端到端测试和运行指标固定规则</td>
+<td>仍需人解释没有被形式化的业务含义</td>
+</tr>
+</tbody></table></div>
+<p>这也符合已有研究给出的警告：在一项针对 Code LLM 的设计模式实验中，不同模型表现出不同的模式偏好，也会出现没有遵守指定模式的情况。因此，模式词可以帮助表达意图，却不能替代对生成结果的检查。<a href="https://arxiv.org/abs/2501.04835" target="_blank" rel="noopener noreferrer">Do Code LLMs Understand Design Patterns?</a></p>
+<p>以 <a href="https://github.com/amwtke/MyLuncher" target="_blank" rel="noopener noreferrer">MyLuncher</a> 为例，下面这段 Java 接口用最小契约规定了所有阶段的共同外形：</p>
+<pre><code class="language-java"><span class="syntax-keyword">public</span> <span class="syntax-keyword">interface</span> <span class="syntax-type">Processor</span>&lt;<span class="syntax-type">T</span> <span class="syntax-keyword">extends</span> <span class="syntax-type">ProcessorContext</span>&gt; {
+    <span class="syntax-keyword">void</span> <span class="syntax-function">process</span>(<span class="syntax-type">T</span> ctx) <span class="syntax-keyword">throws</span> <span class="syntax-type">ProcessorException</span>;
+    <span class="syntax-keyword">int</span> <span class="syntax-function">getPriority</span>();
+    <span class="syntax-type">String</span> <span class="syntax-function">getProcessorName</span>();
+}</code></pre>
+<p><a href="https://github.com/amwtke/MyLuncher/blob/922fe8bfe9c39adacc5f83976f29da8420fa88d8/src/main/java/runtime/processor/baseprocessor/Processor.java#L3-L8" target="_blank" rel="noopener noreferrer">查看 Processor 接口源码</a></p>
+<p>真正推进流水线的是 <code>AbstractService.innerRun</code>。下面节选排序、调用与短路的关键行，日志、异常和忽略规则等从略：</p>
+<pre><code class="language-java">processors = processors.<span class="syntax-function">stream</span>()
+        .<span class="syntax-function">sorted</span>(<span class="syntax-type">Comparator</span>.<span class="syntax-function">comparing</span>(<span class="syntax-type">Processor</span>::getPriority))
+        .<span class="syntax-function">collect</span>(<span class="syntax-type">Collectors</span>.<span class="syntax-function">toList</span>());
+
+<span class="syntax-keyword">for</span> (<span class="syntax-type">P</span> processor : <span class="syntax-function">filterProcessors</span>(processors, processContext)) {
+    processor.<span class="syntax-function">process</span>(processContext);
+    <span class="syntax-keyword">if</span> (processContext.<span class="syntax-function">isFinished</span>()) {
+        <span class="syntax-keyword">break</span>;
+    }
+}</code></pre>
+<p><a href="https://github.com/amwtke/MyLuncher/blob/922fe8bfe9c39adacc5f83976f29da8420fa88d8/src/main/java/runtime/processor/baseservice/AbstractService.java#L22-L46" target="_blank" rel="noopener noreferrer">查看中央执行循环源码</a></p>
+<p>这段代码把约定变成了可以核对的事实：Processor 按优先级排序，中央循环依次调用它们，所有阶段接收同一个 Context，并且可以通过 <code>finished</code> 提前结束。阶段边界、插入位置和执行顺序，因此比一大段混合逻辑更容易被人和 Agent 看见。</p>
+<p>准确地说，它更像<strong>责任链式的集中编排处理器流水线</strong>，而不是教科书式责任链：Processor 不持有下一个处理器，也不自行决定是否调用 <code>next()</code>，推进顺序由中央 Service 控制。这个区别并非咬文嚼字；如果 prompt 只写“增加一个责任链节点”，Agent 仍然不知道该节点是否必经、能否终止后续步骤、应该读取什么，以及异常由谁接管。</p>
+<p>统一接口也只是为独立测试创造了边界，并不会让阶段天然独立。MyLuncher 的测试里，两个 Processor 通过 Context 形成了一个真实但隐含的顺序依赖：</p>
+<pre><code class="language-java"><span class="syntax-comment">// @SortOrder(1)：前一阶段写入共享 Context</span>
+ctx.<span class="syntax-function">getEvents</span>().<span class="syntax-function">add</span>(<span class="syntax-keyword">this</span>.stringToAdd);
+
+<span class="syntax-comment">// @SortOrder(2)：后一阶段假定 events[0] 已经存在</span>
+<span class="syntax-type">String</span> s = ctx.<span class="syntax-function">getEvents</span>().<span class="syntax-function">get</span>(<span class="syntax-number">0</span>);</code></pre>
+<p><a href="https://github.com/amwtke/MyLuncher/blob/922fe8bfe9c39adacc5f83976f29da8420fa88d8/src/test/java/runtime/processor/defaultprocessor/DefaultProcessorServiceTest.java#L105-L143" target="_blank" rel="noopener noreferrer">查看两个测试 Processor 的完整源码</a></p>
+<p>这种依赖可以工作，却没有出现在方法类型里；如果不把 Context 字段的读写权、前置条件和后置条件写清楚，耦合只是从长函数里搬进了共享对象。</p>
+<p>同样，pipeline 解决的是分解和理解问题，不会自动解决计算速度问题。MyLuncher 的 <a href="https://github.com/amwtke/MyLuncher/blob/922fe8bfe9c39adacc5f83976f29da8420fa88d8/src/main/java/runtime/processor/defaultprocessor/DefaultProcessorService.java#L30-L45" target="_blank" rel="noopener noreferrer">runProcessorsAsync 方法</a>只是把同一个 <code>innerRun</code> 交给 Executor，内部 Processor 仍然顺序执行。计算密集型项目若要真正提高吞吐，通常还要对瓶颈阶段做批处理、数据并行或向量化，并明确并发度、队列上限、顺序与背压；有复杂依赖时则应把分支和汇合画成显式的执行图。</p>
+<p>因此，工程师不必了解每个 Processor 内部算法的全部数学细节，但团队必须共同知道：阶段怎样排序，交换什么数据，谁能修改状态，什么时候终止，失败和重试怎样传播，以及整条流程最终必须守住什么业务规则。单个 Processor 的测试全部通过，也不能证明它们组合起来一定正确。</p>
+<p>把这个想法用在 prompt 中，不是用一个模式名替代所有自然语言，而是把业务目标、架构形状和本地约束放在一起：</p>
+<pre><code class="language-text">业务目标：这次要改变什么，明确不改变什么。
+架构形状：顺序 Processor 流水线；每个选中阶段都执行，并非“一个处理后即停止”。
+新增位置：放在 Normalize 与 Score 之间，不允许绕过权限与校验阶段。
+阶段契约：输入、输出、前置条件、后置条件，以及允许读写的 Context 字段。
+运行规则：顺序、并发、超时、重试、幂等、取消和资源上限。
+整体规则：跨阶段仍必须成立的业务不变量。
+验证证据：阶段测试、相邻阶段契约测试、端到端场景和运行指标。</code></pre>
+<p>这也引出了一个与“人仓同步程度”不同的概念：<strong>仓库的可同步性</strong>。前者描述某个人此刻对某个任务了解多少；后者描述仓库是否主动暴露自己的结构、业务语言和约束，让人和 Agent 能够低成本地重新跟上。稳定的模式、清楚的命名和模块边界、可查看的运行拓扑、架构测试与可观测性，都在提高可同步性。</p>
+<blockquote><p><strong>设计模式不是答案，而是三方共享的坐标；只有当模式被项目内契约、代码结构、测试和运行规则固定下来时，它才真正帮助工程师、Agent 与代码保持同步。</strong></p></blockquote>
+<p>对于已经能做出这些判断的工程师，缺少的往往只是一个写代码快、搜索快、试错成本低的执行工具，而 AI 恰好补上了这部分能力。因此，AI 可能让优秀工程师获得更大的产出提升；但这仍然需要真实项目数据验证，不能只根据职级下结论。</p>
+<p>这也解释了为什么有经验的工程师更可能借 AI 获得接近 OPC（一人公司）的工程产能：他们能够决定做什么、约束怎么实现、判断结果是否合格，AI 则负责更快地写和改代码。但这只是一个条件，并不等于产品、运营与商业能力也会自动出现。</p>
+</section>
+</section>
+<section class="doc-section doc-section--level-2" id="sec_9893660ec322453da03355727aa6a433" data-kunkun-section="sec_9893660ec322453da03355727aa6a433" data-level="2" data-title="Loop Engineering 的真正价值：建立纠错，而不是重复生成" aria-labelledby="heading-sec_9893660ec322453da03355727aa6a433">
+<h2 id="heading-sec_9893660ec322453da03355727aa6a433">Loop Engineering 的真正价值：建立纠错，而不是重复生成</h2>
+<p>放到工程师、Agent 和代码三方关系里，Loop Engineering 的价值不是“让模型盲目再试一次”，而是每一轮都根据新结果纠正理解：</p>
+<blockquote><p>看清现状 → 做一个小改动 → 跑测试、看日志 → 比较预期和结果 → 修正理解 → 进入下一轮</p></blockquote>
+<p>测试、日志、trace、静态分析、浏览器行为和 code review，都在告诉人和 Agent“系统实际上发生了什么”。仓库地图、ADR、接口说明、决策记录和可执行示例，则把这些认识保存下来，避免下一轮从头猜。Skill 与 Harness 的价值，是帮助 Agent 在正确时机找到这些材料，并把不知道的地方暴露出来。</p>
+<p>厂商的工程经验也在强调相似原则：从简单、可组合的模式开始，只在需要时增加 Agent 复杂度；上下文应按需检索并持续整理，而不是一次性预装全部资料。<a href="https://www.anthropic.com/engineering/building-effective-agents" target="_blank" rel="noopener noreferrer">Building Effective AI Agents</a>、<a href="https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents" target="_blank" rel="noopener noreferrer">Effective Context Engineering</a></p>
+<p>因此，Loop Engineering 与“工程师理解系统”不是二选一。Loop 提供搜索、执行和检查结果，工程师仍要决定应该做什么、判断结果是否正确。好的 Loop 可以帮助人重新跟上代码，却不能让一个从不检查前提的人自动理解系统。</p>
+</section>
+<section class="doc-section doc-section--level-2" id="sec_425eb5badb4d4a6c83457a1a3750a251" data-kunkun-section="sec_425eb5badb4d4a6c83457a1a3750a251" data-level="2" data-title="无人值守的 Agent 可以做一部分，但不能脱离条件" aria-labelledby="heading-sec_425eb5badb4d4a6c83457a1a3750a251">
+<h2 id="heading-sec_425eb5badb4d4a6c83457a1a3750a251">无人值守的 Agent 可以做一部分，但不能脱离条件</h2>
+<p>“自动分析需求、拆解任务、生成代码、部署上线”的 Agent 集合是否还很遥远，不能用一句“绝对不可能”回答。</p>
+<p>对于需求清楚、影响范围明确、能够自动测试、环境隔离、出错后容易回滚的任务，高度自治已经可以工作。困难集中在需求含糊、业务规则没有写下来、改动跨越多个系统、看不到完整运行状态，以及上线风险很高的任务上。一项面向端到端软件开发的 2025 年基准研究发现，受测 Agent 系统平均只能满足约一半需求，主要失败来源是需求遗漏与自我检查不足；这是一项具体基准的结果，不能外推成所有系统的统一上限。<a href="https://arxiv.org/abs/2511.04064" target="_blank" rel="noopener noreferrer">E2EDevBench</a></p>
+<p>增加 Agent 数量也不一定让结果更好。能够并行处理、分别验收的任务可能受益；必须按顺序推进、频繁共享同一份代码状态的任务，则会增加沟通成本，并把一个错误传给更多 Agent。<a href="https://www.nature.com/articles/s42256-026-01268-y" target="_blank" rel="noopener noreferrer">一项 2026 年的多 Agent 系统研究</a>展示了明显的任务差异。</p>
+<p>比预测“还要多少年”更有用的，是建立一条授权原则：</p>
+<blockquote><p><strong>只有当结果看得见、测得出、影响隔得开、出错退得回时，才适合给 Agent 更大的自主权。</strong></p></blockquote>
+<p>Agent 的数量不会凭空补出缺失的业务规则。能否无人值守，也不只取决于模型有多强，还取决于任务是否清楚、仓库是否容易理解、工具是否可靠，以及测试和发布控制是否完善。</p>
+</section>
+<section class="doc-section doc-section--level-2" id="sec_0858e2bcd6da4d58842e7b5a1d048721" data-kunkun-section="sec_0858e2bcd6da4d58842e7b5a1d048721" data-level="2" data-title="在发射 Agent 前，先建立任务同步包" aria-labelledby="heading-sec_0858e2bcd6da4d58842e7b5a1d048721">
+<h2 id="heading-sec_0858e2bcd6da4d58842e7b5a1d048721">在发射 Agent 前，先建立任务同步包</h2>
+<p>给 Agent 的输入不应只有一句“实现某功能”，而应该包含一份小而完整的任务同步包：</p>
+<ol>
+<li><strong>目标与动机</strong>：要改变什么用户行为，为什么现在改变；</li>
+<li><strong>非目标</strong>：本次明确不解决什么，防止顺手重写；</li>
+<li><strong>当前事实</strong>：入口、调用链、数据所有权和已有实现；</li>
+<li><strong>不能破坏的规则</strong>：权限、事务、幂等、兼容、延迟和一致性要求；</li>
+<li><strong>架构形状与允许范围</strong>：项目采用哪一种本地模式，新组件应放在哪里，可以修改哪些模块、接口和依赖；</li>
+<li><strong>未知与假设</strong>：哪些仍需检索、实验或向领域专家确认；</li>
+<li><strong>验收标准</strong>：可执行测试、可观察信号和失败判据；</li>
+<li><strong>停止条件</strong>：遇到哪些冲突必须暂停，而不是继续猜；</li>
+<li><strong>发布与回滚</strong>：如何灰度、监控、撤销和修复数据。</li>
+</ol>
+<p>Agent 开始工作后，应先查看相关代码、复述任务要求并指出冲突，再提出最小改动；每轮修改都要留下可以检查的 diff 和测试结果。任务结束后，把新发现的规则写回测试、ADR、运行手册或代码结构。同步不是写一次 prompt，而是持续让工程师、Agent 和代码保持一致。</p>
+</section>
+<section class="doc-section doc-section--level-2" id="sec_7c5e29476fa34f20a3313e8201da37b7" data-kunkun-section="sec_7c5e29476fa34f20a3313e8201da37b7" data-level="2" data-title="怎么测工程师与代码仓库是否同步" aria-labelledby="heading-sec_7c5e29476fa34f20a3313e8201da37b7">
+<h2 id="heading-sec_7c5e29476fa34f20a3313e8201da37b7">怎么测工程师与代码仓库是否同步</h2>
+<p>这里有一个需要用真实项目验证的猜想：<strong>工程师越了解当前任务涉及的代码和系统，Agent 任务的成功率是否越高，返工和缺陷是否越少？</strong> 可以用一个 <code>assess-repo-sync</code> Skill 来测试这个猜想，但第一版不应急着给工程师一个永久的“78 分”。</p>
+<p>更准确的评估对象是：</p>
+<blockquote><p>针对一个具体任务，检查某位工程师对当前仓库版本了解到了什么程度，还缺哪些关键知识。</p></blockquote>
+<p>每次评估都必须写清楚：评估谁、哪个 commit、什么任务、允许查看哪些资料和工具，以及评估时间。脱离这些条件的分数没有意义。</p>
+<p>它应至少区分三个结果：</p>
+<ul>
+<li><strong>当前了解程度</strong>：不查资料时，对系统现状能说对多少；</li>
+<li><strong>重新跟上代码的能力</strong>：开放仓库、文档、测试和 Agent 后，能否快速找到证据并改正错误；</li>
+<li><strong>任务准备程度</strong>：补完缺失知识后，适合给 Agent 多大的自主范围。</li>
+</ul>
+<p>评估维度也应该保持多维，而不是用平均分掩盖致命短板：</p>
+<div class="table-wrap"><table><thead><tr>
+<th scope="col">维度</th>
+<th scope="col">需要测量的问题</th>
+</tr></thead><tbody>
+<tr>
+<td>需求来龙去脉</td>
+<td>是否知道需求为什么这样定，哪些规则不能破坏？</td>
+</tr>
+<tr>
+<td>系统实际运行路径</td>
+<td>是否能解释请求、数据和事件实际经过哪里？</td>
+</tr>
+<tr>
+<td>改动会影响哪里</td>
+<td>是否能找出接口、缓存、索引和下游系统的影响？</td>
+</tr>
+<tr>
+<td>底层技术理解</td>
+<td>是否理解本任务涉及的事务、缓存、搜索或流处理机制？</td>
+</tr>
+<tr>
+<td>怎么证明改对了</td>
+<td>是否能给出可执行的验收方式、失败信号和检查位置？</td>
+</tr>
+<tr>
+<td>怎么上线和撤回</td>
+<td>是否知道如何灰度、回滚、修复数据和控制影响范围？</td>
+</tr>
+<tr>
+<td>是否知道自己不知道</td>
+<td>判断没把握时，是否会停下来找证据或请教专家？</td>
+</tr>
+<tr>
+<td>能否把任务交代清楚</td>
+<td>是否能写清目标、非目标、验收和停止条件？</td>
+</tr>
+<tr>
+<td>是否理解本地架构约定</td>
+<td>是否知道该任务遵守哪种处理形状、扩展点，以及哪些边界不能绕开？</td>
+</tr>
+</tbody></table></div>
+<p>前端直连 ES 的例子需要拆成两个问题：不知道当前仓库里的真实调用路径，说明工程师没有跟上代码；不知道 Elasticsearch 的部署、安全和访问边界，说明工程师不熟悉这项技术。两者都会影响 Agent 任务，却不是同一个原因。</p>
+<p>评估还应把人的同步程度与仓库的可同步性分开。关键流程是否有可查看的拓扑，Processor 的输入输出是否明确，架构约定能否被测试，文档是否与当前 commit 一致，都会影响一个人重新跟上代码的成本。如果这些基础条件缺失，工具应报告“仓库难以同步”，而不是把所有知识缺口都归因于工程师。</p>
+<section class="doc-section doc-section--level-3" id="sec_6be3676a9f094d5080748d4f9e1cd153" data-kunkun-section="sec_6be3676a9f094d5080748d4f9e1cd153" data-level="3" data-title="两阶段测量，而不是背代码考试" aria-labelledby="heading-sec_6be3676a9f094d5080748d4f9e1cd153">
+<h3 id="heading-sec_6be3676a9f094d5080748d4f9e1cd153">两阶段测量，而不是背代码考试</h3>
+<p>第一阶段不允许查资料，让受测者解释运行路径、预测影响、识别风险，并说明每个判断有多大把握。第二阶段开放仓库、文档、测试和 Agent，要求引用证据并允许改答案。使用工具不是作弊：真实工作本来就需要靠工具重新跟上代码。</p>
+<p>题目应考因果、预测、验证和纠错，而不是类名记忆，例如：</p>
+<ul>
+<li>这个改动的真实运行路径是什么？每一段调用关系的证据在哪里？</li>
+<li>哪些模块、协议、缓存、索引或消费者可能受影响？</li>
+<li>“让前端直连 ES 可以少一跳”这个方案遗漏了什么边界？</li>
+<li>如果 MySQL 更新成功而索引延迟，用户会观察到什么？如何发现和恢复？</li>
+<li>请为 Agent 写出本任务的非目标、验收、停止条件和回滚要求。</li>
+</ul>
+<p>第一版评分不必套复杂公式，只需要清楚报告四件事：关键事实答对了多少、漏掉了哪些高风险事实、每个判断有没有代码或测试证据，以及把握很大的判断是否真的正确。一个高置信度的错误技术决策，应当比诚实地说“不确定，需要先验证”受到更重的扣分。</p>
+</section>
+<section class="doc-section doc-section--level-3" id="sec_a32e0598f3684e7b9b3724ef993cb9c7" data-kunkun-section="sec_a32e0598f3684e7b9b3724ef993cb9c7" data-level="3" data-title="说明 Agent 可以做到哪一步，而不是给人贴标签" aria-labelledby="heading-sec_a32e0598f3684e7b9b3724ef993cb9c7">
+<h3 id="heading-sec_a32e0598f3684e7b9b3724ef993cb9c7">说明 Agent 可以做到哪一步，而不是给人贴标签</h3>
+<p>Skill 最终应输出：已经了解的内容、知识缺口、判断依据，以及补齐缺口所需的文件和检查项。然后再建议 Agent 可以做到哪一步：</p>
+<ul>
+<li><code>L0 — 证据不足</code>：先补资料或专家确认；</li>
+<li><code>L1 — 探索/规划</code>：Agent 只检索、解释和提出方案；</li>
+<li><code>L2 — 受控修改</code>：允许生成补丁，关键节点人工确认；</li>
+<li><code>L3 — 有界自主</code>：在明确目录、测试和回滚边界内闭环实现。</li>
+</ul>
+<p>生产发布权限应由独立的工程控制决定，不能因为同步评估为绿色就自动授予。这个工具也不应被用来给人贴“懒惰、平庸”的标签；高级工程师可能不了解一个新模块，初级工程师也可能与自己维护的子系统高度同步。</p>
+</section>
+</section>
+<section class="doc-section doc-section--level-2" id="sec_00e6ee4712c2446cbdcc78f7e46d08e1" data-kunkun-section="sec_00e6ee4712c2446cbdcc78f7e46d08e1" data-level="2" data-title="先验证这个评分有没有用，再用它拦任务" aria-labelledby="heading-sec_00e6ee4712c2446cbdcc78f7e46d08e1">
+<h2 id="heading-sec_00e6ee4712c2446cbdcc78f7e46d08e1">先验证这个评分有没有用，再用它拦任务</h2>
+<p><code>assess-repo-sync</code> 的第一版应该运行在 shadow mode，也就是只给建议，不阻止 Agent 发射。</p>
+<p>可以先收集一批真实的“工程师—任务”组合，在任务开始前完成评估，然后跟踪：</p>
+<ul>
+<li>首次评审通过率和严重 review comment 数；</li>
+<li>需求返工、测试遗漏和逃逸缺陷；</li>
+<li>Agent 循环次数、人工接管点和回滚；</li>
+<li>完成时间，但不把速度当作主要质量指标。</li>
+</ul>
+<p>比较结果时，要把职级、接触仓库的时间、任务难度、测试覆盖、文档质量、所用模型和工具分别考虑进去。真正要验证的是：这个评估是否比“职级＋熟悉时长＋任务难度”更能预测质量。</p>
+<p>随后再做对照实验：一组沿用普通 Agent 流程，另一组先评估，再获得针对性的必读文件、待确认问题和 Agent 停止条件。只有后一组确实减少关键遗漏与返工，才能说明这个 Skill 测到的是可以补救的知识缺口，而不是另一种包装过的资历判断。</p>
+<p>还要防止工程师为了分数背题，而不是真正理解系统；也要防止 LLM 自己出题、自己评分，或者拿过期文档当标准答案。每次结果必须绑定 <code>task + commit + timestamp</code>，并设置有效期。仓库本身缺少可靠资料时，应报告“仓库知识不足”，而不是把责任全部扣到工程师身上。评估结果也不应直接用于绩效排名。</p>
+</section>
+<section class="doc-section doc-section--level-2" id="sec_eeef9860431241879f845c961dbca2e0" data-kunkun-section="sec_eeef9860431241879f845c961dbca2e0" data-level="2" data-title="结语：代码可以交给 AI，理解不能缺席" aria-labelledby="heading-sec_eeef9860431241879f845c961dbca2e0">
+<h2 id="heading-sec_eeef9860431241879f845c961dbca2e0">结语：代码可以交给 AI，理解不能缺席</h2>
+<p>Loop Engineering 仍然具有明确价值，Agent 也正在承担越来越长的任务。需要警惕的不是 AI 太强，而是人在实现动作被自动化以后，可能没有察觉自己的系统理解也在逐渐退化。</p>
+<p>工具能减少手写代码、搜索 API 和机械调试的成本，却不会自动生成正确的业务目标、架构边界和责任判断。优秀工程师得到的不是一位替他思考的神，而是一套能够快速写代码、查资料和跑实验的工具。</p>
+<p>所以，AI 编程不是从 prompt 直接通向代码的一条直线。工程师、Agent 和最终交付的代码必须持续对上；测试和运行结果一旦暴露偏差，就要及时修正。Loop Engineering 的下一步，不只是让 Agent 跑得更久、Skill 更多、编排更复杂，还要让工程师知道自己何时没跟上代码，以及怎样重新跟上。</p>
+<blockquote><p>AI 可以替你敲下代码，但不能让你自动理解一个自己从未认真了解过的系统。</p></blockquote>
+</section>
+<section class="doc-section doc-section--level-2" id="sec_c197b722582c430187a0f53de994c3e0" data-kunkun-section="sec_c197b722582c430187a0f53de994c3e0" data-level="2" data-title="参考资料" aria-labelledby="heading-sec_c197b722582c430187a0f53de994c3e0">
+<h2 id="heading-sec_c197b722582c430187a0f53de994c3e0">参考资料</h2>
+<ul>
+<li><a href="https://people.math.harvard.edu/~ctm/home/text/others/shannon/entropy/entropy.pdf" target="_blank" rel="noopener noreferrer">Claude E. Shannon, *A Mathematical Theory of Communication* (1948)</a></li>
+<li><a href="https://ieeexplore.ieee.org/document/5311476" target="_blank" rel="noopener noreferrer">Claude E. Shannon, *Coding Theorems for a Discrete Source With a Fidelity Criterion* (1959)</a></li>
+<li><a href="https://www.cs.columbia.edu/~vh/courses/LexicalSemantics/Association/Cover%26Thomas-Ch2.pdf" target="_blank" rel="noopener noreferrer">Thomas M. Cover &amp; Joy A. Thomas, *Elements of Information Theory*, Chapter 2</a></li>
+<li><a href="https://ocw.mit.edu/courses/6-441-information-theory-spring-2016/resources/mit6_441s16_chapter_23/" target="_blank" rel="noopener noreferrer">MIT 6.441, *Chapter 23: Rate-Distortion Theory*</a></li>
+<li><a href="https://doi.org/10.1080/00207727008920220" target="_blank" rel="noopener noreferrer">Roger C. Conant &amp; W. Ross Ashby, *Every Good Regulator of a System Must Be a Model of That System* (1970)</a></li>
+<li><a href="https://doi.org/10.1145/361598.361623" target="_blank" rel="noopener noreferrer">David L. Parnas, *On the Criteria to Be Used in Decomposing Systems into Modules* (1972)</a></li>
+<li><a href="https://doi.org/10.1016/0165-6074(85" target="_blank" rel="noopener noreferrer">Peter Naur, *Programming as Theory Building* (1985)</a>90032-8)</li>
+<li><a href="https://www.enterpriseintegrationpatterns.com/docs/EnterpriseIntegrationPatterns_HohpeWoolf_ch03.pdf" target="_blank" rel="noopener noreferrer">Gregor Hohpe &amp; Bobby Woolf, *Enterprise Integration Patterns: Pipes and Filters*</a></li>
+<li><a href="https://github.com/amwtke/MyLuncher/tree/922fe8bfe9c39adacc5f83976f29da8420fa88d8" target="_blank" rel="noopener noreferrer">MyLuncher, *Processor Run Engine*</a></li>
+<li><a href="https://arxiv.org/abs/2501.04835" target="_blank" rel="noopener noreferrer">Sara Alrashedy et al., *Do Code LLMs Understand Design Patterns?*</a></li>
+<li><a href="https://docs.spring.io/spring-framework/reference/web/webmvc/mvc-servlet.html" target="_blank" rel="noopener noreferrer">Spring Framework, *DispatcherServlet*</a></li>
+<li><a href="https://docs.spring.io/spring-framework/reference/web/webmvc/mvc-servlet/sequence.html" target="_blank" rel="noopener noreferrer">Spring Framework, *DispatcherServlet Processing*</a></li>
+<li><a href="https://docs.spring.io/spring-framework/reference/core/beans/introduction.html" target="_blank" rel="noopener noreferrer">Spring Framework, *The IoC Container*</a></li>
+<li><a href="https://docs.spring.io/spring-framework/reference/core/aop/proxying.html" target="_blank" rel="noopener noreferrer">Spring Framework, *Proxying Mechanisms*</a></li>
+<li><a href="https://docs.spring.io/spring-security/reference/servlet/architecture.html" target="_blank" rel="noopener noreferrer">Spring Security, *Servlet Architecture*</a></li>
+<li><a href="https://docs.spring.io/spring-boot/reference/using/auto-configuration.html" target="_blank" rel="noopener noreferrer">Spring Boot, *Auto-configuration*</a></li>
+<li><a href="https://www.cs.ubc.ca/~fritz/papers/icse10_dok_web.pdf" target="_blank" rel="noopener noreferrer">Thomas Fritz et al., *A Degree-of-Knowledge Model to Capture Source Code Familiarity* (2010)</a></li>
+<li><a href="https://arxiv.org/abs/2307.03172" target="_blank" rel="noopener noreferrer">Nelson F. Liu et al., *Lost in the Middle*</a></li>
+<li><a href="https://proceedings.mlr.press/v267/modarressi25a.html" target="_blank" rel="noopener noreferrer">Ali Modarressi et al., *NoLiMa*</a></li>
+<li><a href="https://www.anthropic.com/engineering/building-effective-agents" target="_blank" rel="noopener noreferrer">Anthropic, *Building Effective AI Agents*</a></li>
+<li><a href="https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents" target="_blank" rel="noopener noreferrer">Anthropic, *Effective Context Engineering for AI Agents*</a></li>
+<li><a href="https://arxiv.org/abs/2511.04064" target="_blank" rel="noopener noreferrer">Zhengran Zeng et al., *Benchmarking and Studying the LLM-based Agent System in End-to-End Software Development*</a></li>
+<li><a href="https://www.nature.com/articles/s42256-026-01268-y" target="_blank" rel="noopener noreferrer">*Capable Language Models Can Outgrow the Benefits of Collaboration*, Nature Machine Intelligence (2026)</a></li>
+</ul>
+</section>
+    <footer class="footer">Revision 7 · Source 5965034f</footer>
+  </main>
+</body>
+</html>
