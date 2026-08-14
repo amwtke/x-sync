@@ -33,6 +33,8 @@ Do not turn Socratic dialogue into an endless interrogation. Stop after the lear
 
 Record the maximum hint level. Never label a hinted answer as unaided mastery.
 
+Treat an explicit “I don't know; teach me” action as an H4 interruption outside the answer lifecycle. It creates no failed attempt and records no confidence. Pause the quiz, show a dedicated repository-grounded teaching article, collect the learner's reflection, let the host revise the article, and reopen the same question only after the learner explicitly acknowledges understanding. Every later formal answer to that question carries `max_hint_level=4` and `unaided=false`.
+
 ## Ground every question in evidence
 
 Build the question bank from these sources in descending authority:
@@ -101,7 +103,7 @@ Show a simple session score such as `8/10` only as a session result. When a user
 
 ## Calibrate confidence
 
-Collect confidence before feedback as a number in `[0, 1]`. Encourage the learner to answer `unknown` instead of guessing. Keep correctness and confidence separate.
+Collect confidence before feedback as a number in `[0, 1]`. Encourage the learner to request H4 teaching instead of guessing. Do not turn that request into an `unknown` answer attempt. Keep correctness and confidence separate.
 
 Normalize a five-step UI confidence rating with `confidence = (rating - 1) / 4`, then compute the following for objectively graded items:
 
@@ -123,11 +125,21 @@ Use the same persisted state transition in terminal and web flows:
 ```text
 regular single_choice: question_open -> answer_saved -> reviewed
 free_text or Socratic: question_open -> answer_saved -> agent_review_pending -> reviewed
+H4 teaching: question_open -> teaching_open
+learner reflection: teaching_open -> teaching_feedback_saved
+host article revision: teaching_feedback_saved -> teaching_open
+learner understands: teaching_open -> question_open (same question, still unanswered)
 reviewed -> question_open
 reviewed -> completed
 ```
 
-Make every answer durable at `answer_saved`. For a regular single-choice answer, revalidate its evidence and append a deterministic `answer_reviewed` event without entering host-Agent review. Move free-text and every Socratic answer to `agent_review_pending` before semantic grading. Treat terminal `continue` as a request to check durable state, grade at most once, show the result, and advance. Make repeated `continue` commands idempotent. Do not send answer keys to the web client before grading.
+Make every formal answer durable at `answer_saved`. H4 teaching instead appends `teaching_started`, `teaching_feedback_submitted`, `teaching_revised`, and `teaching_completed`; none may add or rewrite an attempt. The article has exactly three layers—operation, function/data-flow logic, and underlying principle—plus a conclusion and reflection prompt. Expand only the frozen answer explanation, rubric, misconceptions, and declared evidence; label generic verification advice as learning method rather than domain fact.
+
+Freeze each reflection against `lesson_id`, `feedback_id`, and `base_revision`. While it is pending, reject answer submission and “我已经懂了”. The host must revalidate current question evidence before publishing a complete new document revision. An exact retry of the same applied revision is idempotent; a different revision for already-applied feedback is a conflict. A browser save cannot wake the host Agent, so terminal `continue` first checks `teaching_pending`, publishes at most one revision, and then waits for the learner's next browser action.
+
+For a regular single-choice answer, revalidate its evidence and append a deterministic `answer_reviewed` event without entering host-Agent review. Move free-text and every Socratic answer to `agent_review_pending` before semantic grading. Treat terminal `continue` as a request to check durable state, grade at most once, show the result, and advance. Make repeated `continue` commands idempotent. Do not send answer keys to the web client before grading or an explicit H4 interruption.
+
+If evidence changes during an open lesson, append `teaching_invalidated`, close the active lesson, preserve any unapplied reflection, and reopen the same question without an attempt. Return the stale evidence IDs to the host. Do not revise or complete the article against stale evidence; any later formal answer follows the normal stale-and-unscored path.
 
 ## Handle stale and disputed items
 

@@ -1,4 +1,5 @@
 import importlib.util
+import copy
 import hashlib
 import json
 import os
@@ -277,13 +278,145 @@ class RuntimeTest(unittest.TestCase):
         self.assertEqual(1, event_types.count("answer_submitted"))
         self.assertEqual(1, event_types.count("answer_reviewed"))
 
-    def test_unknown_is_a_first_class_non_guess(self):
+    def test_unknown_interrupts_into_revisioned_h4_lesson_then_retries_same_question(self):
+        started = xsync.start_session(self.store, "fixture-bank", "regular", "web")
+        lesson_view = xsync.request_teaching(
+            self.store, started["session_id"], started["state"]["state_version"]
+        )
+        lesson = lesson_view["lesson"]
+        self.assertEqual("lesson", lesson_view["view"])
+        self.assertEqual("teaching_open", lesson_view["session"]["status"])
+        self.assertEqual([], xsync.public_session(self.store)["state"]["attempts"])
+        self.assertEqual(
+            ["operation", "logic", "principle"],
+            [section["layer"] for section in lesson["document"]["sections"]],
+        )
+        with self.assertRaises(xsync.XSyncError):
+            xsync.submit_answer(self.store, started["session_id"], "A", "too-early",
+                                confidence=.5)
+
+        saved = xsync.submit_lesson_feedback(
+            self.store, started["session_id"],
+            "我理解答案来自 spec，但还想看清 evidence 到结论的链路。",
+            "feedback-fixture", lesson["lesson_id"], None,
+            lesson_view["session"]["state_version"],
+        )
+        self.assertTrue(saved["lesson"]["feedback_pending"])
+        self.assertIn("evidence 到结论", saved["lesson"]["feedback_pending"]["text"])
+        repeated_feedback = xsync.submit_lesson_feedback(
+            self.store, started["session_id"],
+            "我理解答案来自 spec，但还想看清 evidence 到结论的链路。",
+            "feedback-fixture", lesson["lesson_id"], None,
+            lesson_view["session"]["state_version"],
+        )
+        self.assertEqual(
+            saved["session"]["state_version"],
+            repeated_feedback["session"]["state_version"],
+        )
+        pending = xsync.pending_reviews(self.store, started["session_id"])
+        self.assertEqual([], pending["pending"])
+        self.assertEqual("feedback-fixture",
+                         pending["teaching_pending"]["feedback"]["feedback_id"])
+        with self.assertRaises(xsync.XSyncError):
+            xsync.complete_teaching_lesson(
+                self.store, started["session_id"], lesson["lesson_id"]
+            )
+
+        revised_document = copy.deepcopy(lesson["document"])
+        revised_document["sections"][1]["paragraphs"].append(
+            "spec.md 的 evidence claim 直接约束本题允许得出的结论。"
+        )
+        revision_request = {
+            "session_id": started["session_id"],
+            "lesson_id": lesson["lesson_id"],
+            "feedback_id": "feedback-fixture",
+            "base_revision": 1,
+            "document": revised_document,
+            "author": {"name": "test-host", "version": "1"},
+        }
+        revised = xsync.apply_lesson_revision(self.store, revision_request)
+        self.assertEqual(2, revised["lesson"]["revision"])
+        repeated_revision = xsync.apply_lesson_revision(self.store, revision_request)
+        self.assertEqual(
+            revised["session"]["state_version"],
+            repeated_revision["session"]["state_version"],
+        )
+        resumed = xsync.complete_teaching_lesson(
+            self.store, started["session_id"], lesson["lesson_id"],
+            revised["session"]["state_version"],
+        )
+        self.assertEqual("quiz", resumed["view"])
+        self.assertEqual("business.goal", resumed["question"]["id"])
+        self.assertIsNone(resumed["lesson"])
+
+        answered = xsync.submit_answer(
+            self.store, started["session_id"], "A", "after-lesson",
+            resumed["session"]["state_version"], .75, "spec evidence",
+        )
+        attempt = answered["state"]["attempts"][0]
+        self.assertEqual(4, attempt["max_hint_level"])
+        self.assertFalse(attempt["review"]["unaided"])
+        event_types = [
+            event["event_type"] for event in xsync.load_event_chain(
+                self.store.session_dir(started["session_id"])
+            )
+        ]
+        self.assertEqual(
+            ["teaching_started", "teaching_feedback_submitted",
+             "teaching_revised", "teaching_completed"],
+            [event for event in event_types if event.startswith("teaching_")],
+        )
+
+    def test_terminal_h4_has_feedback_revision_and_complete_cli_paths(self):
         started = xsync.start_session(self.store, "fixture-bank", "regular", "terminal")
-        answered = xsync.submit_answer(self.store, started["session_id"], "unknown",
-                                       "unknown-attempt", confidence=0)
-        self.assertFalse(answered["state"]["attempts"][0]["auto_result"]["correct"])
-        mastery = xsync.rebuild_mastery(self.store)
-        self.assertEqual("incorrect", mastery["reviews"][0]["last_result"])
+
+        def run_cli(*arguments):
+            result = subprocess.run(
+                [sys.executable, str(SCRIPT), *arguments], text=True,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True,
+            )
+            return json.loads(result.stdout)
+
+        taught = run_cli(
+            "teach", "--repo", str(self.repo), "--learner", "alice",
+            "--session", started["session_id"], "--state-version",
+            str(started["session"]["state_version"]), "--json",
+        )
+        lesson = taught["lesson"]
+        saved = run_cli(
+            "lesson", "feedback", "--repo", str(self.repo), "--learner", "alice",
+            "--session", started["session_id"], "--lesson-id", lesson["lesson_id"],
+            "--text", "终端反馈：请补充证据链。", "--feedback-id", "terminal-feedback",
+            "--base-revision", str(lesson["revision"]), "--state-version",
+            str(taught["session"]["state_version"]), "--json",
+        )
+        self.assertEqual("teaching_feedback_saved", saved["session"]["status"])
+        pending = xsync.pending_reviews(self.store, started["session_id"])["teaching_pending"]
+        revision_document = copy.deepcopy(pending["document"])
+        revision_document["sections"][1]["paragraphs"].append("Terminal revision.")
+        revision_path = self.repo / "lesson-revision.json"
+        revision_path.write_text(json.dumps({
+            "session_id": started["session_id"],
+            "lesson_id": lesson["lesson_id"],
+            "feedback_id": "terminal-feedback",
+            "base_revision": pending["base_revision"],
+            "document": revision_document,
+            "author": {"name": "terminal-test", "version": "1"},
+        }), encoding="utf-8")
+        revised = run_cli(
+            "lesson", "revise", "--repo", str(self.repo), "--learner", "alice",
+            "--session", started["session_id"], "--file", str(revision_path), "--json",
+        )
+        completed = run_cli(
+            "lesson", "complete", "--repo", str(self.repo), "--learner", "alice",
+            "--session", started["session_id"], "--lesson-id", lesson["lesson_id"],
+            "--state-version", str(revised["session"]["state_version"]), "--json",
+        )
+        self.assertEqual("question_open", completed["session"]["status"])
+        answered = xsync.submit_answer(
+            self.store, started["session_id"], "A", "terminal-after-h4", confidence=.5
+        )
+        self.assertEqual(4, answered["state"]["attempts"][0]["max_hint_level"])
 
     def test_evidence_is_rechecked_before_scoring_and_host_review(self):
         started = xsync.start_session(self.store, "fixture-bank", "regular", "terminal")
@@ -306,6 +439,38 @@ class RuntimeTest(unittest.TestCase):
         stale = xsync.public_session(self.store, second["session_id"])["state"]["attempts"][0]
         self.assertEqual("Host reasons; runtime stores.", stale["response"])
         self.assertEqual("stale", stale["review"]["status"])
+
+    def test_stale_evidence_closes_pending_lesson_without_deadlocking_session(self):
+        started = xsync.start_session(self.store, "fixture-bank", "regular", "web")
+        taught = xsync.request_teaching(
+            self.store, started["session_id"], started["session"]["state_version"]
+        )
+        lesson = taught["lesson"]
+        xsync.submit_lesson_feedback(
+            self.store, started["session_id"], "请补充这个结论的证据。",
+            "stale-feedback", lesson["lesson_id"], lesson["revision"],
+            taught["session"]["state_version"],
+        )
+        (self.repo / "spec.md").write_text("changed during lesson\n", encoding="utf-8")
+
+        pending = xsync.pending_reviews(self.store, started["session_id"])
+        self.assertIsNone(pending["teaching_pending"])
+        self.assertEqual(["ev.spec"],
+                         pending["teaching_invalidated"]["stale_evidence_ids"])
+        reopened = xsync.public_session(self.store, started["session_id"])
+        self.assertEqual("question_open", reopened["session"]["status"])
+        self.assertEqual([], reopened["state"]["attempts"])
+        self.assertIsNone(reopened["lesson"])
+        self.assertIsNotNone(reopened["state"]["lessons"][0]["completed_at"])
+
+        answered = xsync.submit_answer(
+            self.store, started["session_id"], "A", "stale-after-lesson", confidence=.5
+        )
+        attempt = answered["state"]["attempts"][0]
+        self.assertEqual(4, attempt["max_hint_level"])
+        self.assertEqual("stale", attempt["review"]["status"])
+        events = xsync.load_event_chain(self.store.session_dir(started["session_id"]))
+        self.assertIn("teaching_invalidated", [event["event_type"] for event in events])
 
     def test_unrelated_stale_evidence_does_not_block_a_session(self):
         extra = self.repo / "extra.md"
@@ -924,8 +1089,73 @@ class RuntimeTest(unittest.TestCase):
             self.assertNotIn("state", payload)
             self.assertEqual([{"id": "A", "text": "Alignment"},
                               {"id": "B", "text": "Deployment"}], payload["question"]["choices"])
+            lesson_page = urllib.request.urlopen(base + "/lesson")
+            self.assertEqual(200, lesson_page.status)
+            self.assertNotIn(b"correct_choice", lesson_page.read())
+            lesson_page.close()
+
+            request = urllib.request.Request(
+                base + "/api/v1/teach", method="POST", data=b"{}",
+                headers={"Authorization": "Bearer " + token,
+                         "Content-Type": "application/json"})
+            with self.assertRaises(urllib.error.HTTPError) as missing_version:
+                urllib.request.urlopen(request)
+            self.assertEqual(409, missing_version.exception.code)
+            missing_version.exception.close()
+            unchanged = xsync.public_session(self.store, started["session_id"])
+            self.assertEqual(payload["session"]["state_version"],
+                             unchanged["session"]["state_version"])
+
+            body = json.dumps({
+                "state_version": payload["session"]["state_version"]
+            }).encode()
+            request = urllib.request.Request(base + "/api/v1/teach", method="POST", data=body,
+                headers={"Authorization": "Bearer " + token,
+                         "Content-Type": "application/json"})
+            taught = json.load(urllib.request.urlopen(request))
+            self.assertEqual("lesson", taught["view"])
+            self.assertEqual("teaching_open", taught["session"]["status"])
+
+            body = json.dumps({
+                "lesson_id": taught["lesson"]["lesson_id"],
+                "base_revision": taught["lesson"]["revision"],
+                "text": "请补充 evidence 到结论的链路。",
+                "feedback_id": "http-feedback",
+                "state_version": taught["session"]["state_version"],
+            }).encode()
+            request = urllib.request.Request(
+                base + "/api/v1/lesson/feedback", method="POST", data=body,
+                headers={"Authorization": "Bearer " + token,
+                         "Content-Type": "application/json"})
+            saved_feedback = json.load(urllib.request.urlopen(request))
+            self.assertEqual(
+                "请补充 evidence 到结论的链路。",
+                saved_feedback["lesson"]["feedback_pending"]["text"],
+            )
+
+            pending = xsync.pending_reviews(self.store, started["session_id"])["teaching_pending"]
+            revised_document = copy.deepcopy(pending["document"])
+            revised_document["sections"][1]["paragraphs"].append("HTTP lesson revision.")
+            revised = xsync.apply_lesson_revision(self.store, {
+                "session_id": started["session_id"],
+                "lesson_id": pending["lesson_id"],
+                "feedback_id": pending["feedback"]["feedback_id"],
+                "base_revision": pending["base_revision"],
+                "document": revised_document,
+                "author": {"name": "http-test", "version": "1"},
+            })
+            body = json.dumps({
+                "lesson_id": pending["lesson_id"],
+                "state_version": revised["session"]["state_version"],
+            }).encode()
+            request = urllib.request.Request(
+                base + "/api/v1/lesson/complete", method="POST", data=body,
+                headers={"Authorization": "Bearer " + token,
+                         "Content-Type": "application/json"})
+            resumed = json.load(urllib.request.urlopen(request))
+            self.assertEqual("quiz", resumed["view"])
             body = json.dumps({"answer": "A", "reason": "spec", "confidence": .5,
-                               "state_version": payload["session"]["state_version"],
+                               "state_version": resumed["session"]["state_version"],
                                "attempt_id": "web-attempt"}).encode()
             request = urllib.request.Request(base + "/api/v1/answer", method="POST", data=body,
                 headers={"Authorization": "Bearer " + token,

@@ -164,22 +164,43 @@ Require `sequence` to start at `1` and increase by one. Also persist `from_versi
 
 - `session_started`: require `payload.style`, `payload.channel`, `payload.baseline_commit`, and `payload.focus_topics`; use `style` values `regular` or `socratic` and `channel` values `terminal` or `web`;
 - `question_presented`: require question `id`, `version`, and the evidence-validation timestamp;
-- `answer_submitted`: require `attempt_id`, `answer`, `confidence`, and `submitted_at`; set `answer` to a choice ID, free-text string, or the literal string `unknown`; permit a separate `reason` string; require stored `confidence` in `[0, 1]`;
+- `teaching_requested`: accept only when replaying an older inline-teaching session; new sessions do not emit it;
+- `teaching_started`: require one complete `lesson` record with H4, revision `1`, no feedback, and no completion time;
+- `teaching_feedback_submitted`: require `lesson_id` and one non-empty feedback object frozen to the current `base_revision`;
+- `teaching_revised`: require `lesson_id`, `feedback_id`, and the complete next article revision;
+- `teaching_completed`: require `lesson_id` and `completed_at`; it reopens the same unanswered question;
+- `teaching_invalidated`: require `lesson_id`, `invalidated_at`, and non-empty `stale_evidence_ids`; it closes a lesson whose evidence changed and reopens the same unanswered question;
+- `answer_submitted`: require `attempt_id`, `answer`, `confidence`, `max_hint_level`, and `submitted_at`; set `answer` to a choice ID or free-text string, never an `unknown` sentinel; permit a separate `reason` string; require stored `confidence` in `[0, 1]`;
 - `socratic_turn`: require `attempt_id`, `turn`, `speaker`, `kind`, and `text`; use `speaker` values `learner` or `tutor`;
 - `grading_started`: require `attempt_id` and an idempotency key;
 - `answer_reviewed`: require `attempt_id`, the evaluation object, and `next_review_at` or explicit `null`;
 - `session_ended`: require a reason and an assessed-scope summary.
 
-Store session inputs in `config.json`: require `session_id`, `learner`, `repo_id`, `bank_id`, `baseline_commit`, `style`, `channel`, `focus_topics`, `focus`, `max_depth`, and `task_scope`. Use `focus` values `business`, `technical`, or `mixed`; use `max_depth` values `1..5` or `null`; require non-empty `task_scope`, defaulting to `repository onboarding`. A bare host-skill invocation resolves to `style=socratic`, `channel=web`, `focus=mixed`, and `count=5`; persist those resolved values rather than treating the preset as implicit. Store the current materialized view in `state.json`: require `session_id`, `status`, `current_index`, `current_question_id`, `total`, `attempts`, `consumed_continue_keys`, and `state_version`. Use `status` values `question_open`, `answer_saved`, `agent_review_pending`, `reviewed`, or `completed`. Store every successful continue idempotency key once in `consumed_continue_keys`; do not discard older keys when a later question advances. Increment `state_version` after every accepted transition.
+Store session inputs in `config.json`: require `session_id`, `learner`, `repo_id`, `bank_id`, `baseline_commit`, `style`, `channel`, `focus_topics`, `focus`, `max_depth`, and `task_scope`. Use `focus` values `business`, `technical`, or `mixed`; use `max_depth` values `1..5` or `null`; require non-empty `task_scope`, defaulting to `repository onboarding`. A bare host-skill invocation resolves to `style=socratic`, `channel=web`, `focus=mixed`, and `count=5`; persist those resolved values rather than treating the preset as implicit.
+
+Store the current materialized view in `state.json`: require `session_id`, `status`, `current_index`, `current_question_id`, `total`, `attempts`, `lessons`, `consumed_continue_keys`, and `state_version`. New sessions also retain an empty `teaching_requests` array only for old-event compatibility. Use `status` values `question_open`, `teaching_open`, `teaching_feedback_saved`, `answer_saved`, `agent_review_pending`, `reviewed`, or `completed`. A missing `lessons` or `teaching_requests` field in an older session means an empty list. Store every successful continue idempotency key once in `consumed_continue_keys`; do not discard older keys when a later question advances. Increment `state_version` after every accepted transition.
+
+Each lesson is session-local and has this shape:
+
+```json
+{"lesson_id":"lesson.unique","question_id":"tech.example","question_version":1,"hint_level":4,"started_at":"2026-08-14T00:00:00+00:00","completed_at":null,"revisions":[{"revision":1,"created_at":"2026-08-14T00:00:00+00:00","author":{"name":"x-sync-runtime","version":"0.1.0"},"document":{"title":"...","subtitle":"...","sections":[{"layer":"operation","eyebrow":"第一段","title":"...","paragraphs":["...","..."],"points":["..."],"diagram":"..."},{"layer":"logic","eyebrow":"第二段","title":"...","paragraphs":["...","..."],"points":["..."],"diagram":"..."},{"layer":"principle","eyebrow":"第三段","title":"...","paragraphs":["...","..."],"points":["..."],"diagram":"..."}],"conclusion":"...","reflection_prompt":"...","evidence_ids":["ev.example"]}}],"feedback":[{"feedback_id":"feedback.unique","base_revision":1,"text":"...","submitted_at":"2026-08-14T00:01:00+00:00","applied_revision":null}]}
+```
+
+Require exactly one active lesson, exactly three ordered document layers (`operation`, `logic`, `principle`), consecutive revisions, at most one unapplied feedback item, and `hint_level=4`. Every document revision must cite at least one evidence ID and only IDs bound to that question version. A revision applies one pending feedback by setting its `applied_revision` to the new consecutive revision. Completion is forbidden while feedback remains unapplied. Completed lessons remain append-only evidence that a later answer was aided.
 
 Accept web confidence ratings `1..5`, normalize them before persistence with `confidence = (rating - 1) / 4`, and return only the normalized value in runtime state. Preserve the raw UI rating under a namespaced extension only when needed for diagnostics.
 
-Build the web state response as a view model rather than exposing storage files directly. Merge `config.style` into `session.style`, expose `session.total`, and expose `pending_attempt` whenever the state is `answer_saved` or `agent_review_pending`. Return the current question without `answer`; expose its primary topic as `question.topic`. Keep the persisted canonical fields unchanged.
+Build the web state response as a view model rather than exposing storage files directly. Merge `config.style` into `session.style`, expose `session.total`, and expose `pending_attempt` whenever the state is `answer_saved` or `agent_review_pending`. Return the current question without `answer`; expose its primary topic as `question.topic`. Return `view: quiz` and `lesson: null` before H4 teaching. During `teaching_open` or `teaching_feedback_saved`, return `view: lesson` plus only the active lesson's latest document, revision number, H4 level, a safe pending-feedback snapshot (or null), count, and completion availability. Never embed an answer key in the static HTML or reveal a lesson before `teaching_started`. Keep the persisted canonical fields unchanged.
 
 Rebuild `state.json` from ordered events when it is missing or inconsistent. Validate each event's permitted state delta before accepting `state_after`: an answer event may not rewrite an earlier response, reason, confidence, evidence check, or attempt; a continue event may only append its own idempotency key and make its documented transition. Apply this transition model:
 
 ```text
 session_started or next question_presented -> question_open
+teaching_started -> teaching_open
+teaching_feedback_submitted -> teaching_feedback_saved
+teaching_revised -> teaching_open
+teaching_completed -> question_open (same current_index/current_question_id)
+teaching_invalidated -> question_open (same position, no attempt)
 answer_submitted -> answer_saved
 regular single_choice answer_reviewed -> reviewed
 free_text or Socratic grading_started -> agent_review_pending
@@ -189,6 +210,10 @@ session_ended -> completed
 ```
 
 Append `answer_reviewed` for regular single-choice auto-grading as well as host-Agent grading. Advance only from durable `reviewed` state. A repeated `continue` after `question_presented`, `socratic_turn`, or `session_ended` must return the existing state without another transition. Use `(session_id, attempt_id, question_id, question_version)` as the semantic-grading idempotency key. Append at most one successful `answer_reviewed` event for that key.
+
+While status is `teaching_open` or `teaching_feedback_saved`, reject `answer_submitted`. `pending` returns a separate `teaching_pending` snapshot instead of a grading attempt. Publishing a revision must revalidate the current question evidence before writing any event. The exact same `(lesson_id, feedback_id, base_revision, document, author)` retry returns the already-published revision; a different body for applied feedback is rejected. `teaching_completed` changes no question position and adds no answer attempt.
+
+If evidence becomes stale before revision or completion, append `teaching_invalidated`, set the active lesson's completion time, retain its revision and feedback history, and return to `question_open` without an attempt. Return the stale evidence IDs to the host; do not silently publish the article as current.
 
 Require the evaluation object to contain:
 

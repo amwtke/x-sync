@@ -895,6 +895,11 @@ class Store:
             raise XSyncError(f"会话不存在: {sid}")
         return sid, directory
 
+    def recover(self, directory: Path) -> dict:
+        """Recover and, when needed, repair materialized state under the project lock."""
+        with self.lock():
+            return recover_state(directory)
+
     def mutate(self, directory: Path, event_type: str, payload: dict,
                transform) -> dict:
         with self.lock():
@@ -1790,6 +1795,8 @@ def start_session(store: Store, bank_id: str, style: str, channel: str,
              "state_version": 1, "status": "question_open", "current_index": 0,
              "current_question_id": bank["questions"][0]["id"],
              "total": len(bank["questions"]), "attempts": [],
+             "teaching_requests": [],
+             "lessons": [],
              "consumed_continue_keys": [],
              "created_at": now, "updated_at": now}
     with store.lock():
@@ -1996,6 +2003,132 @@ def validate_review(value: object, label: str) -> dict:
     return value
 
 
+def validate_lesson_document(value: object, label: str) -> dict:
+    """Validate the structured three-act teaching document rendered by the web UI."""
+    if not isinstance(value, dict) or set(value) != {
+        "title", "subtitle", "sections", "conclusion", "reflection_prompt",
+        "evidence_ids",
+    }:
+        raise XSyncError(f"{label} teaching document 字段非法")
+    for field in ("title", "subtitle", "conclusion", "reflection_prompt"):
+        if not isinstance(value[field], str) or not value[field].strip():
+            raise XSyncError(f"{label} teaching document.{field} 不能为空")
+    evidence_ids = value["evidence_ids"]
+    if (not isinstance(evidence_ids, list) or not evidence_ids
+            or not all(isinstance(item, str) and item for item in evidence_ids)
+            or len(set(evidence_ids)) != len(evidence_ids)):
+        raise XSyncError(f"{label} teaching document.evidence_ids 非法")
+    sections = value["sections"]
+    expected_layers = ["operation", "logic", "principle"]
+    if not isinstance(sections, list) or len(sections) != 3:
+        raise XSyncError(f"{label} teaching document 必须恰好包含三段")
+    for index, section in enumerate(sections):
+        if not isinstance(section, dict) or set(section) != {
+            "layer", "eyebrow", "title", "paragraphs", "points", "diagram",
+        }:
+            raise XSyncError(f"{label} teaching section[{index}] 字段非法")
+        if section["layer"] != expected_layers[index]:
+            raise XSyncError(f"{label} teaching section 必须按操作/逻辑/原理排列")
+        if not all(isinstance(section[field], str) and section[field].strip()
+                   for field in ("eyebrow", "title")):
+            raise XSyncError(f"{label} teaching section[{index}] 标题非法")
+        if not isinstance(section["diagram"], str):
+            raise XSyncError(f"{label} teaching section[{index}].diagram 非法")
+        for field, minimum in (("paragraphs", 2), ("points", 1)):
+            items = section[field]
+            if (not isinstance(items, list) or len(items) < minimum
+                    or not all(isinstance(item, str) and item.strip() for item in items)):
+                raise XSyncError(f"{label} teaching section[{index}].{field} 非法")
+    return value
+
+
+def validate_lesson_revision(value: object, label: str) -> dict:
+    if not isinstance(value, dict) or set(value) != {
+        "revision", "created_at", "author", "document",
+    }:
+        raise XSyncError(f"{label} lesson revision 字段非法")
+    revision = value["revision"]
+    if not isinstance(revision, int) or isinstance(revision, bool) or revision < 1:
+        raise XSyncError(f"{label} lesson revision 序号非法")
+    parse_timestamp(value["created_at"])
+    author = value["author"]
+    if (not isinstance(author, dict) or set(author) != {"name", "version"}
+            or not all(isinstance(author[field], str) and author[field]
+                       for field in ("name", "version"))):
+        raise XSyncError(f"{label} lesson revision author 非法")
+    validate_lesson_document(value["document"], label)
+    return value
+
+
+def validate_lesson_record(value: object, label: str) -> dict:
+    if not isinstance(value, dict) or set(value) != {
+        "lesson_id", "question_id", "question_version", "hint_level",
+        "started_at", "completed_at", "revisions", "feedback",
+    }:
+        raise XSyncError(f"{label} lesson 字段非法")
+    if (not isinstance(value["lesson_id"], str) or not ID_RE.fullmatch(value["lesson_id"])
+            or not isinstance(value["question_id"], str)
+            or not ID_RE.fullmatch(value["question_id"])
+            or not isinstance(value["question_version"], int)
+            or isinstance(value["question_version"], bool)
+            or value["question_version"] < 1 or value["hint_level"] != 4):
+        raise XSyncError(f"{label} lesson identity 非法")
+    started_at = parse_timestamp(value["started_at"])
+    if value["completed_at"] is not None:
+        completed_at = parse_timestamp(value["completed_at"])
+    else:
+        completed_at = None
+    revisions = value["revisions"]
+    if not isinstance(revisions, list) or not revisions:
+        raise XSyncError(f"{label} lesson revisions 不能为空")
+    revision_times = []
+    prior_time = started_at
+    for index, revision in enumerate(revisions, 1):
+        validate_lesson_revision(revision, f"{label} r{index}")
+        if revision["revision"] != index:
+            raise XSyncError(f"{label} lesson revisions 必须连续")
+        revision_time = parse_timestamp(revision["created_at"])
+        if revision_time < prior_time:
+            raise XSyncError(f"{label} lesson revision 时间倒序")
+        revision_times.append(revision_time)
+        prior_time = revision_time
+    feedback_items = value["feedback"]
+    if not isinstance(feedback_items, list):
+        raise XSyncError(f"{label} lesson feedback 非法")
+    feedback_ids = []
+    unresolved = 0
+    for item in feedback_items:
+        if (not isinstance(item, dict) or set(item) != {
+                "feedback_id", "base_revision", "text", "submitted_at",
+                "applied_revision",
+            }
+                or not isinstance(item["feedback_id"], str)
+                or not ID_RE.fullmatch(item["feedback_id"])
+                or not isinstance(item["base_revision"], int)
+                or isinstance(item["base_revision"], bool)
+                or not 1 <= item["base_revision"] <= len(revisions)
+                or not isinstance(item["text"], str) or not item["text"].strip()
+                or len(item["text"]) > 12000
+                or not isinstance(item["applied_revision"], (int, type(None)))
+                or isinstance(item["applied_revision"], bool)):
+            raise XSyncError(f"{label} lesson feedback item 非法")
+        submitted_at = parse_timestamp(item["submitted_at"])
+        if submitted_at < revision_times[item["base_revision"] - 1]:
+            raise XSyncError(f"{label} lesson feedback 早于基础修订")
+        applied = item["applied_revision"]
+        if applied is not None and not item["base_revision"] < applied <= len(revisions):
+            raise XSyncError(f"{label} lesson feedback applied_revision 非法")
+        if applied is not None and revision_times[applied - 1] < submitted_at:
+            raise XSyncError(f"{label} lesson applied revision 早于 feedback")
+        unresolved += int(applied is None)
+        feedback_ids.append(item["feedback_id"])
+    if len(set(feedback_ids)) != len(feedback_ids) or unresolved > 1:
+        raise XSyncError(f"{label} lesson feedback 重复或并发未处理")
+    if completed_at is not None and completed_at < revision_times[-1]:
+        raise XSyncError(f"{label} lesson completion 早于最后修订")
+    return value
+
+
 def validate_materialized_state(value: object, session_id: str, label: str) -> dict:
     if not isinstance(value, dict) or value.get("session_id") != session_id:
         raise XSyncError(f"{label} 会话状态非法")
@@ -2004,8 +2137,8 @@ def validate_materialized_state(value: object, session_id: str, label: str) -> d
     status = value.get("status")
     index, total, version = (value.get("current_index"), value.get("total"),
                              value.get("state_version"))
-    if status not in {"question_open", "answer_saved", "agent_review_pending",
-                      "reviewed", "completed"}:
+    if status not in {"question_open", "teaching_open", "teaching_feedback_saved",
+                      "answer_saved", "agent_review_pending", "reviewed", "completed"}:
         raise XSyncError(f"{label} status 非法")
     if (not isinstance(index, int) or isinstance(index, bool) or index < 0
             or not isinstance(total, int) or isinstance(total, bool) or total < 1
@@ -2023,9 +2156,57 @@ def validate_materialized_state(value: object, session_id: str, label: str) -> d
             or not all(isinstance(key, str) and key for key in consumed)
             or len(set(consumed)) != len(consumed)):
         raise XSyncError(f"{label} consumed_continue_keys 非法")
+    teaching_requests = value.get("teaching_requests", [])
+    teaching_keys = []
+    teaching_questions = []
+    for request in teaching_requests if isinstance(teaching_requests, list) else ():
+        if (not isinstance(request, dict)
+                or set(request) != {
+                    "question_id", "question_version", "requested_at",
+                    "hint_level", "idempotency_key",
+                }
+                or not isinstance(request.get("question_id"), str)
+                or not isinstance(request.get("question_version"), int)
+                or isinstance(request.get("question_version"), bool)
+                or request["question_version"] < 1
+                or request.get("hint_level") != 4
+                or not isinstance(request.get("idempotency_key"), str)
+                or not request["idempotency_key"]):
+            raise XSyncError(f"{label} teaching_requests 非法")
+        parse_timestamp(request.get("requested_at"))
+        teaching_keys.append(request["idempotency_key"])
+        teaching_questions.append((request["question_id"], request["question_version"]))
+    if (not isinstance(teaching_requests, list)
+            or len(set(teaching_keys)) != len(teaching_keys)
+            or len(set(teaching_questions)) != len(teaching_questions)):
+        raise XSyncError(f"{label} teaching_requests 非法")
+    lessons = value.get("lessons", [])
+    if not isinstance(lessons, list):
+        raise XSyncError(f"{label} lessons 非法")
+    lesson_ids = []
+    active_lessons = []
+    for lesson in lessons:
+        validate_lesson_record(lesson, label)
+        lesson_ids.append(lesson["lesson_id"])
+        if lesson["completed_at"] is None:
+            active_lessons.append(lesson)
+    if len(set(lesson_ids)) != len(lesson_ids) or len(active_lessons) > 1:
+        raise XSyncError(f"{label} lessons 重复或存在多个活动教学")
+    if status in {"teaching_open", "teaching_feedback_saved"}:
+        if (len(active_lessons) != 1
+                or active_lessons[0]["question_id"] != current):
+            raise XSyncError(f"{label} teaching 状态缺少当前 lesson")
+        unresolved = [item for item in active_lessons[0]["feedback"]
+                      if item["applied_revision"] is None]
+        if ((status == "teaching_open" and unresolved)
+                or (status == "teaching_feedback_saved" and len(unresolved) != 1)):
+            raise XSyncError(f"{label} teaching 状态与 feedback 不一致")
+    elif active_lessons:
+        raise XSyncError(f"{label} 非 teaching 状态不得保留活动 lesson")
     allowed_attempt_fields = {
         "attempt_id", "question_id", "question_version", "response", "reason",
-        "confidence", "saved_at", "evidence_check", "auto_result", "review",
+        "confidence", "saved_at", "evidence_check", "max_hint_level",
+        "auto_result", "review",
     }
     attempt_ids = []
     for attempt in value["attempts"]:
@@ -2040,7 +2221,10 @@ def validate_materialized_state(value: object, session_id: str, label: str) -> d
                 or isinstance(attempt.get("confidence"), bool)
                 or not 0 <= attempt["confidence"] <= 1
                 or not isinstance(attempt.get("saved_at"), str)
-                or not isinstance(attempt.get("evidence_check"), dict)):
+                or not isinstance(attempt.get("evidence_check"), dict)
+                or not isinstance(attempt.get("max_hint_level", 0), int)
+                or isinstance(attempt.get("max_hint_level", 0), bool)
+                or not 0 <= attempt.get("max_hint_level", 0) <= 4):
             raise XSyncError(f"{label} attempt 字段非法")
         evidence_check = attempt["evidence_check"]
         if (evidence_check.get("status") not in {"fresh", "stale"}
@@ -2092,9 +2276,65 @@ def validate_event_payload(event_type: str, payload: object, label: str) -> dict
                 or isinstance(payload.get("question_version"), bool)
                 or not isinstance(confidence, (int, float)) or isinstance(confidence, bool)
                 or not 0 <= confidence <= 1
+                or not isinstance(payload.get("max_hint_level", 0), int)
+                or isinstance(payload.get("max_hint_level", 0), bool)
+                or not 0 <= payload.get("max_hint_level", 0) <= 4
                 or not isinstance(payload.get("evidence_check"), dict)):
             raise XSyncError(f"{label} answer_submitted payload 非法")
         parse_timestamp(payload["submitted_at"])
+    elif event_type == "teaching_requested":
+        if (not strings("question_id", "requested_at", "idempotency_key")
+                or not isinstance(payload.get("question_version"), int)
+                or isinstance(payload.get("question_version"), bool)
+                or payload["question_version"] < 1
+                or payload.get("hint_level") != 4):
+            raise XSyncError(f"{label} teaching_requested payload 非法")
+        parse_timestamp(payload["requested_at"])
+    elif event_type == "teaching_started":
+        if set(payload) != {"lesson"}:
+            raise XSyncError(f"{label} teaching_started payload 非法")
+        lesson = validate_lesson_record(payload["lesson"], label)
+        if (lesson["completed_at"] is not None or len(lesson["revisions"]) != 1
+                or lesson["feedback"]):
+            raise XSyncError(f"{label} teaching_started lesson 非法")
+    elif event_type == "teaching_feedback_submitted":
+        if set(payload) != {"lesson_id", "feedback"} or not strings("lesson_id"):
+            raise XSyncError(f"{label} teaching_feedback_submitted payload 非法")
+        feedback = payload.get("feedback")
+        if (not isinstance(feedback, dict) or set(feedback) != {
+                "feedback_id", "base_revision", "text", "submitted_at",
+                "applied_revision",
+            }
+                or not isinstance(feedback.get("feedback_id"), str)
+                or not ID_RE.fullmatch(feedback["feedback_id"])
+                or not isinstance(feedback.get("base_revision"), int)
+                or isinstance(feedback.get("base_revision"), bool)
+                or feedback["base_revision"] < 1
+                or not isinstance(feedback.get("text"), str)
+                or not feedback["text"].strip()
+                or len(feedback["text"]) > 12000
+                or feedback.get("applied_revision") is not None):
+            raise XSyncError(f"{label} teaching feedback 非法")
+        parse_timestamp(feedback["submitted_at"])
+    elif event_type == "teaching_revised":
+        if (set(payload) != {"lesson_id", "feedback_id", "revision"}
+                or not strings("lesson_id", "feedback_id")):
+            raise XSyncError(f"{label} teaching_revised payload 非法")
+        validate_lesson_revision(payload.get("revision"), label)
+    elif event_type == "teaching_completed":
+        if (set(payload) != {"lesson_id", "completed_at"}
+                or not strings("lesson_id", "completed_at")):
+            raise XSyncError(f"{label} teaching_completed payload 非法")
+        parse_timestamp(payload["completed_at"])
+    elif event_type == "teaching_invalidated":
+        stale_ids = payload.get("stale_evidence_ids")
+        if (set(payload) != {"lesson_id", "invalidated_at", "stale_evidence_ids"}
+                or not strings("lesson_id", "invalidated_at")
+                or not isinstance(stale_ids, list) or not stale_ids
+                or not all(isinstance(item, str) and item for item in stale_ids)
+                or len(set(stale_ids)) != len(stale_ids)):
+            raise XSyncError(f"{label} teaching_invalidated payload 非法")
+        parse_timestamp(payload["invalidated_at"])
     elif event_type == "socratic_turn":
         if (not strings("attempt_id", "speaker", "kind", "text", "idempotency_key")
                 or payload.get("speaker") not in {"learner", "tutor"}
@@ -2135,6 +2375,7 @@ def validate_event_transition(previous: dict | None, event: dict,
     if previous is None:
         if (event_type != "session_started" or state_after["status"] != "question_open"
                 or state_after["current_index"] != 0 or state_after["attempts"]
+                or state_after.get("teaching_requests") or state_after.get("lessons")
                 or state_after["consumed_continue_keys"]):
             raise XSyncError(f"{label} 首事件必须创建 question_open 会话")
         return
@@ -2143,6 +2384,11 @@ def validate_event_transition(previous: dict | None, event: dict,
     def unchanged_except(*allowed: str) -> bool:
         ignored = {"state_version", "updated_at", *allowed}
         return ({key: value for key, value in before.items() if key not in ignored}
+                == {key: value for key, value in state_after.items() if key not in ignored})
+
+    def matches_expected(expected: dict) -> bool:
+        ignored = {"state_version", "updated_at"}
+        return ({key: value for key, value in expected.items() if key not in ignored}
                 == {key: value for key, value in state_after.items() if key not in ignored})
 
     def current_attempt() -> dict | None:
@@ -2172,7 +2418,92 @@ def validate_event_transition(previous: dict | None, event: dict,
     )
     if event_type == "session_started":
         raise XSyncError(f"{label} session_started 只能是首事件")
-    if event_type == "answer_submitted":
+    if event_type == "teaching_started":
+        lesson = payload["lesson"]
+        expected = json.loads(json.dumps(before))
+        expected["status"] = "teaching_open"
+        expected["lessons"] = [*expected.get("lessons", []), lesson]
+        valid = (before["status"] == "question_open" and same_position
+                 and lesson["question_id"] == before["current_question_id"]
+                 and matches_expected(expected))
+    elif event_type == "teaching_feedback_submitted":
+        expected = json.loads(json.dumps(before))
+        lesson = next((item for item in expected.get("lessons", [])
+                       if item.get("lesson_id") == payload["lesson_id"]), None)
+        if lesson is not None:
+            lesson["feedback"] = [*lesson["feedback"], payload["feedback"]]
+        expected["status"] = "teaching_feedback_saved"
+        valid = (before["status"] == "teaching_open" and same_position
+                 and lesson is not None and lesson["completed_at"] is None
+                 and payload["feedback"]["base_revision"] == len(lesson["revisions"])
+                 and matches_expected(expected))
+    elif event_type == "teaching_revised":
+        expected = json.loads(json.dumps(before))
+        lesson = next((item for item in expected.get("lessons", [])
+                       if item.get("lesson_id") == payload["lesson_id"]), None)
+        feedback = None
+        if lesson is not None:
+            feedback = next((item for item in lesson["feedback"]
+                             if item.get("feedback_id") == payload["feedback_id"]), None)
+        feedback_was_pending = (
+            feedback is not None and feedback.get("applied_revision") is None
+        )
+        if lesson is not None and feedback is not None:
+            feedback["applied_revision"] = payload["revision"]["revision"]
+            lesson["revisions"] = [*lesson["revisions"], payload["revision"]]
+        expected["status"] = "teaching_open"
+        valid = (before["status"] == "teaching_feedback_saved" and same_position
+                 and lesson is not None and lesson["completed_at"] is None
+                 and feedback_was_pending and feedback.get("applied_revision")
+                     == payload["revision"]["revision"]
+                 and payload["revision"]["revision"] == len(lesson["revisions"])
+                 and matches_expected(expected))
+    elif event_type == "teaching_completed":
+        expected = json.loads(json.dumps(before))
+        lesson = next((item for item in expected.get("lessons", [])
+                       if item.get("lesson_id") == payload["lesson_id"]), None)
+        if lesson is not None:
+            lesson["completed_at"] = payload["completed_at"]
+        expected["status"] = "question_open"
+        valid = (before["status"] == "teaching_open" and same_position
+                 and lesson is not None
+                 and not any(item["applied_revision"] is None
+                             for item in lesson["feedback"])
+                 and matches_expected(expected))
+    elif event_type == "teaching_invalidated":
+        expected = json.loads(json.dumps(before))
+        lesson = next((item for item in expected.get("lessons", [])
+                       if item.get("lesson_id") == payload["lesson_id"]), None)
+        if lesson is not None:
+            lesson["completed_at"] = payload["invalidated_at"]
+        expected["status"] = "question_open"
+        valid = (before["status"] in {"teaching_open", "teaching_feedback_saved"}
+                 and same_position and lesson is not None
+                 and lesson.get("question_id") == before["current_question_id"]
+                 and matches_expected(expected))
+    elif event_type == "teaching_requested":
+        requests = state_after.get("teaching_requests", [])
+        new_request = requests[-1] if requests else {}
+        expected_key = idempotency_key(
+            "teaching", event["session_id"], payload["question_id"],
+            payload["question_version"],
+        )
+        valid = (before["status"] == "question_open"
+                 and state_after["status"] == "question_open"
+                 and same_position
+                 and unchanged_except("teaching_requests")
+                 and requests[:-1] == before.get("teaching_requests", [])
+                 and len(requests) == len(before.get("teaching_requests", [])) + 1
+                 and new_request == {
+                     "question_id": payload["question_id"],
+                     "question_version": payload["question_version"],
+                     "requested_at": payload["requested_at"],
+                     "hint_level": 4,
+                     "idempotency_key": expected_key,
+                 }
+                 and payload["question_id"] == before["current_question_id"]
+                 and payload["idempotency_key"] == expected_key)
+    elif event_type == "answer_submitted":
         new_attempt = state_after["attempts"][-1] if state_after["attempts"] else {}
         auto = new_attempt.get("auto_result")
         auto_valid = (auto is None or (
@@ -2191,6 +2522,8 @@ def validate_event_transition(previous: dict | None, event: dict,
                  and new_attempt.get("reason") == payload.get("reason", "")
                  and new_attempt.get("confidence") == payload["confidence"]
                  and new_attempt.get("saved_at") == payload["submitted_at"]
+                 and new_attempt.get("max_hint_level", 0)
+                     == payload.get("max_hint_level", 0)
                  and new_attempt.get("evidence_check") == payload.get("evidence_check")
                  and "review" not in new_attempt
                  and auto_valid)
@@ -2409,6 +2742,12 @@ def validate_state_against_bank(state: dict, config: dict, bank: dict) -> None:
         review = attempt.get("review")
         if not isinstance(review, dict):
             continue
+        required_hint = int(attempt.get("max_hint_level", 0))
+        if (review.get("max_hint_level", 0) < required_hint
+                or (required_hint > 0 and review.get("unaided") is True)):
+            raise XSyncError(
+                f"attempt {attempt['attempt_id']} review 未保留教学提示级别"
+            )
         if not math.isclose(float(review["confidence"]), float(attempt["confidence"]), abs_tol=1e-12):
             raise XSyncError(f"attempt {attempt['attempt_id']} review confidence 不一致")
         if not set(review["evidence_ids"]) <= cited:
@@ -2424,7 +2763,15 @@ def validate_state_against_bank(state: dict, config: dict, bank: dict) -> None:
                                          abs_tol=1e-9)):
                 raise XSyncError(f"{label} correctness 与 rubric 汇总分不一致")
         elif review["rubric_results"]:
-            raise XSyncError(f"attempt {attempt['attempt_id']} 客观题不得携带 rubric 评分")
+            # A single-choice answer remains objectively correct or incorrect, but
+            # Socratic banks may attach an optional rubric for the learner's rationale.
+            # Validate that rubric independently without deriving correctness from it.
+            validate_question_rubric_results(
+                question,
+                review["rubric_results"],
+                f"attempt {attempt['attempt_id']}",
+                require_complete=True,
+            )
         objective = question["type"] == "single_choice" and review["status"] == "graded"
         calibration_present = review["brier_error"] is not None
         if objective != calibration_present:
@@ -2435,12 +2782,23 @@ def validate_state_against_bank(state: dict, config: dict, bank: dict) -> None:
             if (review["correctness"] != expected or review["outcome"] != expected_outcome
                     or review["status"] != "graded"):
                 raise XSyncError(f"attempt {attempt['attempt_id']} 自动复核与 auto_result 不一致")
+    for lesson in state.get("lessons", []):
+        key = (lesson["question_id"], lesson["question_version"])
+        question = by_key.get(key)
+        if question is None:
+            raise XSyncError(f"lesson {lesson['lesson_id']} 引用未知题目版本")
+        cited = set(question.get("evidence_ids", []))
+        for revision in lesson["revisions"]:
+            if not set(revision["document"]["evidence_ids"]) <= cited:
+                raise XSyncError(
+                    f"lesson {lesson['lesson_id']} teaching document evidence 越界"
+                )
 
 
 def session_data(store: Store, session: str | None) -> tuple[str, Path, dict, dict, dict]:
     sid, directory = store.resolve_session(session)
     config = load_json(directory / "config.json")
-    state = recover_state(directory)
+    state = store.recover(directory)
     if not isinstance(config, dict) or not isinstance(state, dict):
         raise XSyncError("会话文件损坏")
     assert store.project
@@ -2481,12 +2839,214 @@ def public_question(question: dict | None, state: dict, config: dict) -> dict | 
     return allowed
 
 
+def teaching_request_for_question(state: dict, question: dict | None) -> dict | None:
+    if question is None:
+        return None
+    question_version = question.get("version", 1)
+    return next((
+        request for request in reversed(state.get("teaching_requests", []))
+        if request.get("question_id") == question.get("id")
+        and request.get("question_version") == question_version
+    ), None)
+
+
+def build_teaching_view(question: dict, request: dict) -> dict:
+    """Reveal only the current answer after an explicit H4 teaching request."""
+    answer = question.get("answer", {})
+    if question.get("type") == "single_choice":
+        correct_id = answer.get("correct_choice")
+        choice = next((item for item in question.get("choices", [])
+                       if item.get("id") == correct_id), None)
+        if choice is None:
+            raise XSyncError("当前题目的参考答案已损坏")
+        answer_text = f"{correct_id}. {choice['text']}"
+    else:
+        answer_text = answer.get("reference_answer")
+    explanation = answer.get("explanation")
+    if (not isinstance(answer_text, str) or not answer_text.strip()
+            or not isinstance(explanation, str) or not explanation.strip()):
+        raise XSyncError("当前题目缺少可展示的答案或原理")
+    return {
+        "question_id": question["id"],
+        "question_version": question.get("version", 1),
+        "hint_level": 4,
+        "answer_text": answer_text,
+        "explanation": explanation,
+        "requested_at": request.get("requested_at"),
+    }
+
+
+def lesson_answer_text(question: dict) -> str:
+    """Return the canonical answer text used only after an H4 interruption."""
+    answer = question.get("answer", {})
+    if question.get("type") == "single_choice":
+        correct_id = answer.get("correct_choice")
+        choice = next((item for item in question.get("choices", [])
+                       if item.get("id") == correct_id), None)
+        if choice is None:
+            raise XSyncError("当前题目的参考答案已损坏")
+        return f"{correct_id}. {choice['text']}"
+    reference = answer.get("reference_answer")
+    if not isinstance(reference, str) or not reference.strip():
+        raise XSyncError("当前题目缺少参考答案")
+    return reference.strip()
+
+
+def build_initial_lesson_document(question: dict, bank: dict) -> dict:
+    """Build a repository-grounded operation/logic/principle teaching article."""
+    answer_text = lesson_answer_text(question)
+    explanation = question.get("answer", {}).get("explanation")
+    if not isinstance(explanation, str) or not explanation.strip():
+        raise XSyncError("当前题目缺少原理分析")
+    evidence_ids = list(question.get("evidence_ids", []))
+    evidence_by_id = {
+        item.get("id"): item for item in bank.get("evidence", [])
+        if isinstance(item, dict) and isinstance(item.get("id"), str)
+    }
+    evidence_lines = []
+    for evidence_id in evidence_ids:
+        evidence = evidence_by_id.get(evidence_id, {})
+        description = next((evidence.get(field) for field in (
+            "claim", "summary", "description", "title"
+        ) if isinstance(evidence.get(field), str) and evidence[field].strip()), None)
+        source = evidence.get("source", {}) if isinstance(evidence, dict) else {}
+        location = source.get("path") if isinstance(source, dict) else None
+        detail = description or "这是题目绑定的仓库证据；正式结论只能在该证据仍有效时成立。"
+        if isinstance(location, str) and location:
+            detail = f"{detail}（位置：{location}）"
+        evidence_lines.append(f"{evidence_id}：{detail}")
+    misconceptions = [
+        f"{choice['id']}：{choice['misconception']}"
+        for choice in question.get("choices", [])
+        if isinstance(choice, dict)
+        and isinstance(choice.get("misconception"), str)
+        and choice["misconception"].strip()
+    ]
+    rubric_points = [
+        str(item.get("description"))
+        for item in question.get("answer", {}).get("rubric", [])
+        if isinstance(item, dict)
+        and isinstance(item.get("description"), str)
+        and item["description"].strip()
+    ]
+    logic_points = rubric_points or misconceptions or [
+        "先区分题目真正要求判断的对象，再检查支持这项判断的仓库契约。"
+    ]
+    boundary_points = misconceptions or [
+        "如果绑定证据、题目版本或前置条件变化，这个结论必须重新验证，不能机械套用。"
+    ]
+    topic = " / ".join(str(item) for item in question.get("topics", [])[:3]) or "当前知识点"
+    document = {
+        "title": f"从零理解：{topic}",
+        "subtitle": "一次 H4 教学中断：先掌握答案，再理解因果链与适用边界。",
+        "sections": [
+            {
+                "layer": "operation",
+                "eyebrow": "第一段 · 操作层",
+                "title": "先建立一个可以执行的判断",
+                "paragraphs": [
+                    f"先给出结论：本题的参考答案是 {answer_text}。这不是一次作答，也不会写入测试成绩；它是测试被中断后提供的教学起点。",
+                    f"题目原文是“{question.get('prompt', '')}”。实际判断时，先圈定题目中的对象和成立条件，再把论证中的关键步骤逐一映射到仓库证据，最后才选择答案。",
+                ],
+                "points": [
+                    "复述结论，但不要只记选项字母；要同时记住它成立所依赖的条件。",
+                    "沿着题目 → 定义或约束 → 证据 → 结论的顺序检查，避免从表面现象直接跳到答案。",
+                ],
+                "diagram": "题目中的现象\n    ↓ 圈定判断对象\n项目契约与完成条件\n    ↓ 核对证据\n可解释的参考答案",
+            },
+            {
+                "layer": "logic",
+                "eyebrow": "第二段 · 功能与数据流层",
+                "title": "把答案还原成一条证据与论证链",
+                "paragraphs": [
+                    explanation.strip(),
+                    "这里列出的 evidence 是本题允许引用的事实边界。请逐条核对它们是否真的支持上面的解释；如果只能支持其中一部分，就只保留被支持的那部分结论。",
+                ],
+                "points": logic_points,
+                "diagram": "题目版本\n    ↓ 限定问题\nevidence 事实\n    ↓ 支持 explanation\n当前结论",
+            },
+            {
+                "layer": "principle",
+                "eyebrow": "第三段 · 底层原理层",
+                "title": "理解为什么成立，以及何时不成立",
+                "paragraphs": [
+                    "这一段讲的是可迁移的学习方法，而不是给当前业务领域增加新事实：先把 explanation 拆成若干论证步骤，再确认关键步骤都能回指到本题绑定的 evidence。没有证据支撑的扩展只能作为待验证假设。",
+                    "接着主动寻找反例和失效条件。只要题目版本、绑定证据或 explanation 所依赖的前提发生变化，就应重新验证，而不是把这次答案机械套用到另一个场景。",
+                ],
+                "points": [*boundary_points, *evidence_lines],
+                "diagram": "已验证结论\n    = explanation 的每一步\n    + 对应 evidence\n    + 明确适用边界",
+            },
+        ],
+        "conclusion": (
+            f"你现在需要带走的最小模型是：答案为 {answer_text}；理由是“{explanation.strip()}”。"
+            "重新答题时，请用自己的话同时说出判断对象、证据和至少一个适用边界。"
+        ),
+        "reflection_prompt": (
+            "请写下你的理解：这道题真正判断的对象是什么？参考答案为什么成立？"
+            "还有哪一步、哪个术语或哪个边界仍然不清楚？"
+        ),
+        "evidence_ids": evidence_ids,
+    }
+    return validate_lesson_document(document, "initial lesson")
+
+
+def active_lesson_for_question(state: dict, question: dict | None) -> dict | None:
+    if question is None:
+        return None
+    version = question.get("version", 1)
+    return next((
+        lesson for lesson in reversed(state.get("lessons", []))
+        if lesson.get("question_id") == question.get("id")
+        and lesson.get("question_version") == version
+        and lesson.get("completed_at") is None
+    ), None)
+
+
+def lesson_hint_level(state: dict, question: dict | None) -> int:
+    if question is None:
+        return 0
+    version = question.get("version", 1)
+    lesson = next((
+        item for item in reversed(state.get("lessons", []))
+        if item.get("question_id") == question.get("id")
+        and item.get("question_version") == version
+    ), None)
+    if lesson is not None:
+        return int(lesson.get("hint_level", 4))
+    legacy = teaching_request_for_question(state, question)
+    return int(legacy.get("hint_level", 0)) if legacy else 0
+
+
+def lesson_public_view(lesson: dict | None) -> dict | None:
+    if lesson is None:
+        return None
+    revision = lesson["revisions"][-1]
+    pending = next((item for item in reversed(lesson["feedback"])
+                    if item["applied_revision"] is None), None)
+    return {
+        "lesson_id": lesson["lesson_id"],
+        "question_id": lesson["question_id"],
+        "question_version": lesson["question_version"],
+        "hint_level": lesson["hint_level"],
+        "started_at": lesson["started_at"],
+        "revision": revision["revision"],
+        "document": revision["document"],
+        "feedback_pending": ({
+            key: pending[key] for key in (
+                "feedback_id", "base_revision", "text", "submitted_at"
+            )
+        } if pending is not None else None),
+        "feedback_count": len(lesson["feedback"]),
+        "can_complete": pending is None,
+    }
+
+
 def public_session(store: Store, session: str | None = None) -> dict:
     sid, _, config, state, bank = session_data(store, session)
     question = current_question(state, bank)
     attempts = [{k: a.get(k) for k in ("attempt_id", "question_id", "question_version",
                                         "response", "reason", "confidence", "saved_at",
-                                        "auto_result", "review") if k in a}
+                                        "max_hint_level", "auto_result", "review") if k in a}
                 for a in state.get("attempts", [])]
     session_view = {**config, "status": state["status"],
                     "current_index": state["current_index"],
@@ -2495,9 +3055,19 @@ def public_session(store: Store, session: str | None = None) -> dict:
     pending = next((a for a in reversed(attempts)
                     if a["question_id"] == state.get("current_question_id")
                     and "review" not in a), None)
+    teaching_request = teaching_request_for_question(state, question)
+    teaching = (build_teaching_view(question, teaching_request)
+                if question is not None and teaching_request is not None else None)
+    active_lesson = active_lesson_for_question(state, question)
+    view = "lesson" if state["status"] in {
+        "teaching_open", "teaching_feedback_saved"
+    } else "quiz"
     return {"schema_version": SCHEMA_VERSION, "session": session_view,
             "state": {**state, "attempts": attempts},
             "question": public_question(question, state, config),
+            "view": view,
+            "lesson": lesson_public_view(active_lesson),
+            "teaching": teaching,
             "pending_attempt": pending if state["status"] in {"answer_saved", "agent_review_pending"} else None,
             "progress": {"current": min(state["current_index"] + 1, len(bank["questions"])),
                          "total": len(bank["questions"])}, "session_id": sid}
@@ -2518,6 +3088,9 @@ def public_web_session(store: Store, session: str | None = None) -> dict:
         "session_id": value["session_id"],
         "session": value["session"],
         "question": value["question"],
+        "view": value["view"],
+        "lesson": value["lesson"],
+        "teaching": value["teaching"],
         "pending_attempt": safe_pending,
         "progress": value["progress"],
     }
@@ -2546,10 +3119,11 @@ def learner_status(store: Store) -> dict:
 
 
 def stale_review(attempt: dict, evidence_ids: list[str]) -> dict:
+    max_hint_level = int(attempt.get("max_hint_level", 0))
     return {
         "status": "stale", "correctness": None, "initial_correctness": None,
         "final_correctness": None, "reasoning": None, "evidence_use": None,
-        "max_hint_level": 0, "unaided": False, "rubric_results": [],
+        "max_hint_level": max_hint_level, "unaided": False, "rubric_results": [],
         "confidence": float(attempt.get("confidence", 0.5)),
         "brier_error": None, "overconfidence": None,
         "evidence_ids": sorted(set(evidence_ids)),
@@ -2564,7 +3138,7 @@ def stale_review(attempt: dict, evidence_ids: list[str]) -> dict:
 
 def mark_attempt_stale(store: Store, sid: str, directory: Path, question: dict,
                        attempt_id: str, evidence_ids: list[str]) -> dict:
-    before = recover_state(directory)
+    before = store.recover(directory)
     before_attempt = next((item for item in before.get("attempts", [])
                            if item.get("attempt_id") == attempt_id), None)
     if before_attempt is None:
@@ -2598,7 +3172,7 @@ def mark_attempt_stale(store: Store, sid: str, directory: Path, question: dict,
 
 def apply_auto_review(store: Store, sid: str, directory: Path, question: dict,
                       attempt_id: str) -> dict:
-    state = recover_state(directory)
+    state = store.recover(directory)
     attempt = next((item for item in state.get("attempts", [])
                     if item.get("attempt_id") == attempt_id), None)
     if attempt is None:
@@ -2607,12 +3181,13 @@ def apply_auto_review(store: Store, sid: str, directory: Path, question: dict,
     auto_result = {"correct": correct, "selected": attempt.get("response")}
     correctness = float(correct)
     confidence = float(attempt.get("confidence", 0.5))
+    max_hint_level = int(attempt.get("max_hint_level", 0))
     outcome = "mastered" if correctness == 1 else "exhausted"
     review = {
         "status": "graded", "correctness": correctness,
         "initial_correctness": None, "final_correctness": None,
-        "reasoning": None, "evidence_use": None, "max_hint_level": 0,
-        "unaided": correctness == 1, "rubric_results": [],
+        "reasoning": None, "evidence_use": None, "max_hint_level": max_hint_level,
+        "unaided": correctness == 1 and max_hint_level == 0, "rubric_results": [],
         "confidence": confidence, "brier_error": (confidence - correctness) ** 2,
         "overconfidence": confidence - correctness,
         "evidence_ids": list(question.get("evidence_ids", [])),
@@ -2648,7 +3223,7 @@ def apply_auto_review(store: Store, sid: str, directory: Path, question: dict,
 def dispatch_saved_answer(store: Store, sid: str, directory: Path,
                           config: dict, bank: dict) -> dict:
     """Resume the durable post-submit step after a process interruption."""
-    state = recover_state(directory)
+    state = store.recover(directory)
     if state.get("status") != "answer_saved":
         return public_session(store, sid)
     question = current_question(state, bank)
@@ -2675,6 +3250,314 @@ def dispatch_saved_answer(store: Store, sid: str, directory: Path,
     if question["type"] == "single_choice" and config["style"] == "regular":
         return apply_auto_review(store, sid, directory, question, attempt["attempt_id"])
     return public_session(store, sid)
+
+
+def request_teaching(store: Store, session: str | None,
+                     expected_version: int | None = None) -> dict:
+    """Interrupt the quiz and open a durable H4 teaching lesson."""
+    sid, directory, _, state, bank = session_data(store, session)
+    question = current_question(state, bank)
+    if question is None:
+        raise XSyncError("当前没有题目")
+    existing = active_lesson_for_question(state, question)
+    if existing is not None:
+        return public_web_session(store, sid)
+    if expected_version is not None and expected_version != state["state_version"]:
+        raise XSyncError(f"状态版本冲突: 当前为 {state['state_version']}")
+    if state["status"] != "question_open":
+        raise XSyncError(f"当前状态 {state['status']} 不接受教学请求")
+    validate_question_evidence(store.repo, bank, question)
+    started_at = utc_now()
+    question_version = question.get("version", 1)
+    lesson = {
+        "lesson_id": f"lesson.{uuid.uuid4().hex}",
+        "question_id": question["id"],
+        "question_version": question_version,
+        "hint_level": 4,
+        "started_at": started_at,
+        "completed_at": None,
+        "revisions": [{
+            "revision": 1,
+            "created_at": started_at,
+            "author": {"name": "x-sync-runtime", "version": "0.1.0"},
+            "document": build_initial_lesson_document(question, bank),
+        }],
+        "feedback": [],
+    }
+    validate_lesson_record(lesson, "new lesson")
+
+    def transform(value: dict) -> dict:
+        duplicate = next((
+            item for item in value.get("lessons", [])
+            if item.get("question_id") == question["id"]
+            and item.get("question_version") == question_version
+            and item.get("completed_at") is None
+        ), None)
+        if duplicate is not None:
+            return value
+        if expected_version is not None and expected_version != value["state_version"]:
+            raise XSyncError(f"状态版本冲突: 当前为 {value['state_version']}")
+        if (value["status"] != "question_open"
+                or value["current_question_id"] != question["id"]):
+            raise XSyncError("题目状态已经变化，请刷新后重试")
+        value["lessons"] = [*value.get("lessons", []), lesson]
+        value["status"] = "teaching_open"
+        return value
+
+    store.mutate(directory, "teaching_started", {"lesson": lesson}, transform)
+    return public_web_session(store, sid)
+
+
+def submit_lesson_feedback(
+    store: Store, session: str | None, text: str,
+    feedback_id: str | None = None, lesson_id: str | None = None,
+    base_revision: int | None = None, expected_version: int | None = None,
+) -> dict:
+    """Save one learner reflection for host-agent revision; never create an attempt."""
+    sid, directory, _, state, bank = session_data(store, session)
+    question = current_question(state, bank)
+    lesson = active_lesson_for_question(state, question)
+    feedback_id = feedback_id or f"feedback.{uuid.uuid4().hex}"
+    validate_component(feedback_id, " feedback id", ID_RE)
+    if lesson_id is None:
+        lesson_id = lesson.get("lesson_id") if lesson is not None else None
+    if not isinstance(lesson_id, str):
+        raise XSyncError("缺少 lesson_id")
+    validate_component(lesson_id, " lesson id", ID_RE)
+    if not isinstance(text, str) or not text.strip():
+        raise XSyncError("请先写下你对文章的理解或仍不清楚的地方")
+    text = text.strip()
+    if len(text) > 12000:
+        raise XSyncError("教学反馈不能超过 12000 个字符")
+    if lesson is None or lesson["lesson_id"] != lesson_id:
+        raise XSyncError("教学页面已经变化，请刷新后重试")
+    latest_revision = lesson["revisions"][-1]["revision"]
+    if base_revision is None:
+        base_revision = latest_revision
+    if (not isinstance(base_revision, int) or isinstance(base_revision, bool)
+            or base_revision != latest_revision):
+        raise XSyncError(f"文章版本冲突: 当前为 {latest_revision}")
+    existing = next((item for item in lesson["feedback"]
+                     if item["feedback_id"] == feedback_id), None)
+    if existing is not None:
+        if existing["text"] == text and existing["base_revision"] == base_revision:
+            return public_web_session(store, sid)
+        raise XSyncError("feedback_id 已用于不同教学反馈")
+    if expected_version is not None and expected_version != state["state_version"]:
+        raise XSyncError(f"状态版本冲突: 当前为 {state['state_version']}")
+    if state["status"] != "teaching_open":
+        raise XSyncError(f"当前状态 {state['status']} 不接受教学反馈")
+    submitted_at = utc_now()
+    feedback = {
+        "feedback_id": feedback_id,
+        "base_revision": base_revision,
+        "text": text,
+        "submitted_at": submitted_at,
+        "applied_revision": None,
+    }
+
+    def transform(value: dict) -> dict:
+        current_lesson = next((item for item in value.get("lessons", [])
+                               if item.get("lesson_id") == lesson_id), None)
+        if current_lesson is None or current_lesson.get("completed_at") is not None:
+            raise XSyncError("教学页面已经变化，请刷新后重试")
+        duplicate = next((item for item in current_lesson["feedback"]
+                          if item["feedback_id"] == feedback_id), None)
+        if duplicate is not None:
+            if (duplicate["text"] == text
+                    and duplicate["base_revision"] == base_revision):
+                return value
+            raise XSyncError("feedback_id 已用于不同教学反馈")
+        if expected_version is not None and expected_version != value["state_version"]:
+            raise XSyncError(f"状态版本冲突: 当前为 {value['state_version']}")
+        if (value["status"] != "teaching_open"
+                or value.get("current_question_id") != question["id"]):
+            raise XSyncError("教学状态已经变化，请刷新后重试")
+        if current_lesson["revisions"][-1]["revision"] != base_revision:
+            raise XSyncError("文章已经更新，请阅读新版后重新提交反馈")
+        if any(item["applied_revision"] is None for item in current_lesson["feedback"]):
+            raise XSyncError("已有教学反馈等待处理")
+        current_lesson["feedback"] = [*current_lesson["feedback"], feedback]
+        value["status"] = "teaching_feedback_saved"
+        return value
+
+    store.mutate(directory, "teaching_feedback_submitted", {
+        "lesson_id": lesson_id, "feedback": feedback,
+    }, transform)
+    return public_web_session(store, sid)
+
+
+def invalidate_teaching_lesson(
+    store: Store, sid: str, directory: Path, question: dict,
+    lesson: dict, stale_evidence_ids: list[str],
+) -> dict:
+    """Close a lesson whose repository evidence changed, without creating an attempt."""
+    stale_ids = sorted(set(stale_evidence_ids))
+    if not stale_ids:
+        raise XSyncError("teaching invalidation 缺少 stale evidence")
+    invalidated_at = utc_now()
+    lesson_id = lesson["lesson_id"]
+
+    def transform(value: dict) -> dict:
+        current_lesson = next((item for item in value.get("lessons", [])
+                               if item.get("lesson_id") == lesson_id), None)
+        if current_lesson is not None and current_lesson.get("completed_at") is not None:
+            return value
+        if (value.get("status") not in {"teaching_open", "teaching_feedback_saved"}
+                or value.get("current_question_id") != question["id"]
+                or current_lesson is None):
+            raise XSyncError("教学状态已经变化，请刷新后重试")
+        current_lesson["completed_at"] = invalidated_at
+        value["status"] = "question_open"
+        return value
+
+    store.mutate(directory, "teaching_invalidated", {
+        "lesson_id": lesson_id,
+        "invalidated_at": invalidated_at,
+        "stale_evidence_ids": stale_ids,
+    }, transform)
+    result = public_web_session(store, sid)
+    result["teaching_invalidated"] = {
+        "lesson_id": lesson_id,
+        "stale_evidence_ids": stale_ids,
+        "message": "仓库证据已变化，本次教学已关闭；请回到终端重新校验题库。",
+    }
+    return result
+
+
+def apply_lesson_revision(
+    store: Store, revision_value: object, session: str | None = None,
+) -> dict:
+    """Publish one host-agent article revision against an immutable feedback snapshot."""
+    if not isinstance(revision_value, dict):
+        raise XSyncError("lesson revision 必须为 object")
+    sid = str(revision_value.get("session_id") or session or "")
+    if not sid:
+        raise XSyncError("lesson revision 缺少 session_id")
+    sid, directory, _, state, bank = session_data(store, sid)
+    question = current_question(state, bank)
+    lesson_id = revision_value.get("lesson_id")
+    feedback_id = revision_value.get("feedback_id")
+    base_revision = revision_value.get("base_revision")
+    lesson = next((item for item in reversed(state.get("lessons", []))
+                   if item.get("lesson_id") == lesson_id), None)
+    if lesson is None or question is None or lesson["question_id"] != question["id"]:
+        raise XSyncError("当前没有等待修订的教学文章")
+    feedback = next((item for item in lesson["feedback"]
+                     if item["feedback_id"] == feedback_id), None)
+    if feedback is None:
+        raise XSyncError("lesson revision 未引用当前待处理 feedback")
+    latest_revision = lesson["revisions"][-1]["revision"]
+    document = validate_lesson_document(revision_value.get("document"), "lesson revision")
+    document_evidence = set(document["evidence_ids"])
+    question_evidence = set(question.get("evidence_ids", []))
+    if not document_evidence or not document_evidence <= question_evidence:
+        raise XSyncError("lesson revision 必须引用当前题目绑定的 evidence")
+    author = revision_value.get("author")
+    if feedback["applied_revision"] is not None:
+        applied = lesson["revisions"][feedback["applied_revision"] - 1]
+        if (base_revision == feedback["base_revision"]
+                and applied["document"] == document and applied["author"] == author):
+            return public_web_session(store, sid)
+        raise XSyncError("feedback 已由不同的教学修订处理")
+    if (state["status"] != "teaching_feedback_saved"
+            or lesson.get("completed_at") is not None
+            or not isinstance(base_revision, int) or isinstance(base_revision, bool)
+            or base_revision != latest_revision
+            or feedback["base_revision"] != base_revision):
+        raise XSyncError("教学反馈或文章版本已经变化，请重新读取 pending")
+    try:
+        validate_question_evidence(store.repo, bank, question)
+    except EvidenceStaleError as exc:
+        return invalidate_teaching_lesson(
+            store, sid, directory, question, lesson, exc.evidence_ids
+        )
+    next_revision = {
+        "revision": latest_revision + 1,
+        "created_at": utc_now(),
+        "author": author,
+        "document": document,
+    }
+    validate_lesson_revision(next_revision, "lesson revision")
+
+    def transform(value: dict) -> dict:
+        current_lesson = next((item for item in value.get("lessons", [])
+                               if item.get("lesson_id") == lesson_id), None)
+        if (value["status"] != "teaching_feedback_saved"
+                or value.get("current_question_id") != question["id"]
+                or current_lesson is None or current_lesson["completed_at"] is not None):
+            raise XSyncError("教学状态已经变化，请重新读取 pending")
+        current_feedback = next((item for item in current_lesson["feedback"]
+                                 if item["feedback_id"] == feedback_id), None)
+        if (current_feedback is None or current_feedback["applied_revision"] is not None
+                or current_feedback["base_revision"] != base_revision
+                or current_lesson["revisions"][-1]["revision"] != base_revision):
+            raise XSyncError("教学反馈或文章版本已经变化，请重新读取 pending")
+        current_feedback["applied_revision"] = next_revision["revision"]
+        current_lesson["revisions"] = [*current_lesson["revisions"], next_revision]
+        value["status"] = "teaching_open"
+        return value
+
+    store.mutate(directory, "teaching_revised", {
+        "lesson_id": lesson_id, "feedback_id": feedback_id,
+        "revision": next_revision,
+    }, transform)
+    return public_web_session(store, sid)
+
+
+def complete_teaching_lesson(
+    store: Store, session: str | None, lesson_id: str,
+    expected_version: int | None = None,
+) -> dict:
+    """Acknowledge understanding and reopen the same, still-unanswered question."""
+    sid, directory, _, state, bank = session_data(store, session)
+    validate_component(lesson_id, " lesson id", ID_RE)
+    question = current_question(state, bank)
+    active = active_lesson_for_question(state, question)
+    if active is None:
+        completed = next((item for item in reversed(state.get("lessons", []))
+                          if item.get("lesson_id") == lesson_id
+                          and item.get("completed_at") is not None), None)
+        if completed is not None:
+            return public_web_session(store, sid)
+        raise XSyncError("教学页面已经变化，请刷新后重试")
+    if active["lesson_id"] != lesson_id:
+        raise XSyncError("lesson_id 不是当前教学文章")
+    if expected_version is not None and expected_version != state["state_version"]:
+        raise XSyncError(f"状态版本冲突: 当前为 {state['state_version']}")
+    if state["status"] != "teaching_open":
+        raise XSyncError("仍有理解反馈等待终端修订，暂时不能继续答题")
+    if any(item["applied_revision"] is None for item in active["feedback"]):
+        raise XSyncError("仍有理解反馈等待终端修订，暂时不能继续答题")
+    try:
+        validate_question_evidence(store.repo, bank, question)
+    except EvidenceStaleError as exc:
+        return invalidate_teaching_lesson(
+            store, sid, directory, question, active, exc.evidence_ids
+        )
+    completed_at = utc_now()
+
+    def transform(value: dict) -> dict:
+        current_lesson = next((item for item in value.get("lessons", [])
+                               if item.get("lesson_id") == lesson_id), None)
+        if current_lesson is not None and current_lesson.get("completed_at") is not None:
+            return value
+        if expected_version is not None and expected_version != value["state_version"]:
+            raise XSyncError(f"状态版本冲突: 当前为 {value['state_version']}")
+        if (value["status"] != "teaching_open"
+                or value.get("current_question_id") != question["id"]
+                or current_lesson is None
+                or any(item["applied_revision"] is None
+                       for item in current_lesson["feedback"])):
+            raise XSyncError("教学状态已经变化，请刷新后重试")
+        current_lesson["completed_at"] = completed_at
+        value["status"] = "question_open"
+        return value
+
+    store.mutate(directory, "teaching_completed", {
+        "lesson_id": lesson_id, "completed_at": completed_at,
+    }, transform)
+    return public_web_session(store, sid)
 
 
 def submit_answer(store: Store, session: str | None, response: str,
@@ -2704,8 +3587,11 @@ def submit_answer(store: Store, session: str | None, response: str,
         raise XSyncError("当前没有题目")
     if q["type"] == "single_choice":
         valid = {choice["id"] for choice in q["choices"]}
-        if response not in valid | {"unknown"}:
-            raise XSyncError(f"选择必须是: {', '.join(sorted(valid))} 或 unknown")
+        if response not in valid:
+            raise XSyncError(
+                f"选择必须是: {', '.join(sorted(valid))}；不知道时请先请求讲解"
+            )
+    max_hint_level = lesson_hint_level(state, q)
     stale_ids: list[str] = []
     evidence_checked_at = utc_now()
     submitted_at = utc_now()
@@ -2728,6 +3614,7 @@ def submit_answer(store: Store, session: str | None, response: str,
         attempt = {"attempt_id": attempt_id, "question_id": q["id"],
                    "question_version": q.get("version", 1), "response": response,
                    "reason": reason, "confidence": float(confidence), "saved_at": submitted_at,
+                   "max_hint_level": max_hint_level,
                    "evidence_check": {
                        "status": "stale" if stale_ids else "fresh",
                        "evidence_ids": list(stale_ids), "checked_at": evidence_checked_at,
@@ -2744,6 +3631,7 @@ def submit_answer(store: Store, session: str | None, response: str,
     store.mutate(directory, "answer_submitted", {"attempt_id": attempt_id,
                  "question_id": q["id"], "question_version": q.get("version", 1),
                  "answer": response, "reason": reason, "confidence": float(confidence),
+                 "max_hint_level": max_hint_level,
                  "submitted_at": submitted_at,
                  "evidence_check": {"status": "stale" if stale_ids else "fresh",
                                     "evidence_ids": list(stale_ids),
@@ -2753,6 +3641,38 @@ def submit_answer(store: Store, session: str | None, response: str,
 
 def pending_reviews(store: Store, session: str | None) -> dict:
     sid, directory, config, state, bank = session_data(store, session)
+    if state["status"] in {"teaching_open", "teaching_feedback_saved"}:
+        question = current_question(state, bank)
+        lesson = active_lesson_for_question(state, question)
+        if lesson is None:
+            raise XSyncError("教学状态缺少当前 lesson")
+        try:
+            validate_question_evidence(store.repo, bank, question)
+        except EvidenceStaleError as exc:
+            invalidated = invalidate_teaching_lesson(
+                store, sid, directory, question, lesson, exc.evidence_ids
+            )
+            return {
+                "pending": [], "teaching_pending": None,
+                "teaching_invalidated": invalidated["teaching_invalidated"],
+            }
+        feedback = next((item for item in reversed(lesson["feedback"])
+                         if item["applied_revision"] is None), None)
+        teaching_pending = None
+        if feedback is not None:
+            revision = lesson["revisions"][-1]
+            teaching_pending = {
+                "session_id": sid,
+                "lesson_id": lesson["lesson_id"],
+                "question_id": lesson["question_id"],
+                "question_version": lesson["question_version"],
+                "base_revision": revision["revision"],
+                "feedback": feedback,
+                "document": revision["document"],
+                "question": question,
+                "style": config["style"],
+            }
+        return {"pending": [], "teaching_pending": teaching_pending}
     if state["status"] == "answer_saved":
         dispatch_saved_answer(store, sid, directory, config, bank)
         sid, directory, config, state, bank = session_data(store, sid)
@@ -2767,7 +3687,7 @@ def pending_reviews(store: Store, session: str | None) -> dict:
             except EvidenceStaleError as exc:
                 mark_attempt_stale(store, sid, directory, q, attempt["attempt_id"],
                                    exc.evidence_ids)
-                state = recover_state(directory)
+                state = store.recover(directory)
                 continue
             result.append({
                 "session_id": sid, "attempt_id": attempt["attempt_id"],
@@ -2776,6 +3696,7 @@ def pending_reviews(store: Store, session: str | None) -> dict:
                 "question": q, "response": attempt["response"],
                 "reason": attempt.get("reason", ""),
                 "confidence": attempt.get("confidence", 0.5),
+                "max_hint_level": attempt.get("max_hint_level", 0),
                 "saved_at": attempt.get("saved_at"), "style": config["style"],
             })
     if result and state["status"] == "answer_saved":
@@ -2888,6 +3809,13 @@ def apply_review(store: Store, review_value: object, session: str | None = None)
     unaided = evaluation.get("unaided", review_value.get("unaided", False))
     if not isinstance(unaided, bool):
         raise XSyncError("unaided 必须为 boolean")
+    required_hint = int(attempt.get("max_hint_level", 0))
+    if max_hint < required_hint:
+        raise XSyncError(
+            f"该答案在 H{required_hint} 教学后提交，max_hint_level 不能更低"
+        )
+    if required_hint > 0 and unaided:
+        raise XSyncError("教学后的答案不能标记为 unaided")
     evidence_ids = evaluation.get("evidence_ids", review_value.get("evidence_ids", []))
     if not isinstance(evidence_ids, list) or not all(isinstance(item, str) for item in evidence_ids):
         raise XSyncError("review evidence_ids 必须为字符串数组")
@@ -2976,6 +3904,10 @@ def continue_session(store: Store, session: str | None) -> dict:
         sid, directory, config, state, bank = session_data(store, sid)
     if state["status"] == "agent_review_pending":
         raise XSyncError("仍有答案等待 host agent 复核；先运行 pending 和 review apply")
+    if state["status"] == "teaching_feedback_saved":
+        raise XSyncError("仍有教学反馈等待 host agent 修订；先运行 pending 和 lesson revise")
+    if state["status"] == "teaching_open":
+        return public_session(store, sid)
     if state["status"] == "completed":
         return public_session(store, sid)
     if state["status"] == "question_open":
@@ -3457,7 +4389,7 @@ class QuizHandler(http.server.BaseHTTPRequestHandler):
         path = self.path.split("?", 1)[0]
         if not self._host_ok():
             self._problem(403, "invalid Host")
-        elif path == "/":
+        elif path in {"/", "/lesson"}:
             self._send(200, self.html, "text/html; charset=utf-8")
         elif path in {"/api/state", "/api/v1/state"}:
             if not self._authorized():
@@ -3486,12 +4418,37 @@ class QuizHandler(http.server.BaseHTTPRequestHandler):
             return
         try:
             data = json.loads(self.rfile.read(length))
+            if not isinstance(data, dict):
+                raise XSyncError("请求 JSON 必须为 object")
+
+            def required_version(name: str) -> int:
+                value = data.get(name)
+                if (not isinstance(value, int) or isinstance(value, bool) or value < 1):
+                    raise XSyncError(f"{name} 必须为正整数")
+                return value
+
             if self.path in {"/api/answer", "/api/v1/answer"}:
                 submit_answer(self.store, self.session_id,
                               data.get("answer", data.get("response")),
-                              data.get("attempt_id"), data.get("state_version"),
+                              data.get("attempt_id"), required_version("state_version"),
                               data.get("confidence", 0.5), data.get("reason", ""))
                 result = public_web_session(self.store, self.session_id)
+            elif self.path in {"/api/teach", "/api/v1/teach"}:
+                result = request_teaching(
+                    self.store, self.session_id, required_version("state_version")
+                )
+            elif self.path == "/api/v1/lesson/feedback":
+                result = submit_lesson_feedback(
+                    self.store, self.session_id, data.get("text"),
+                    data.get("feedback_id"), data.get("lesson_id"),
+                    required_version("base_revision"),
+                    required_version("state_version"),
+                )
+            elif self.path == "/api/v1/lesson/complete":
+                result = complete_teaching_lesson(
+                    self.store, self.session_id, data.get("lesson_id"),
+                    required_version("state_version"),
+                )
             else:
                 self._problem(404, "not found")
                 return
@@ -3585,6 +4542,21 @@ def parser() -> argparse.ArgumentParser:
     answer = sub.add_parser("answer"); learner_args(answer); answer.add_argument("--choice"); answer.add_argument("--text")
     answer.add_argument("--attempt-id"); answer.add_argument("--state-version", type=int)
     answer.add_argument("--confidence", type=float, required=True); answer.add_argument("--reason", default=""); json_arg(answer)
+    teach = sub.add_parser("teach"); learner_args(teach)
+    teach.add_argument("--state-version", type=int); json_arg(teach)
+    lesson = sub.add_parser("lesson")
+    lsub = lesson.add_subparsers(dest="lesson_command", required=True)
+    feedback = lsub.add_parser("feedback"); learner_args(feedback)
+    feedback.add_argument("--lesson-id", required=True)
+    feedback.add_argument("--text", required=True)
+    feedback.add_argument("--feedback-id")
+    feedback.add_argument("--base-revision", type=int)
+    feedback.add_argument("--state-version", type=int); json_arg(feedback)
+    revise = lsub.add_parser("revise"); learner_args(revise)
+    revise.add_argument("--file", required=True); json_arg(revise)
+    understood = lsub.add_parser("complete"); learner_args(understood)
+    understood.add_argument("--lesson-id", required=True)
+    understood.add_argument("--state-version", type=int); json_arg(understood)
     pending = sub.add_parser("pending"); learner_args(pending); json_arg(pending)
     review = sub.add_parser("review"); rsub = review.add_subparsers(dest="review_command", required=True)
     apply = rsub.add_parser("apply"); learner_args(apply); apply.add_argument("--file", required=True); json_arg(apply)
@@ -3645,6 +4617,21 @@ def main(argv: list[str] | None = None) -> int:
             result = submit_answer(store, args.session, args.choice or args.text,
                                    args.attempt_id, args.state_version,
                                    args.confidence, args.reason)
+        elif args.command == "teach":
+            result = request_teaching(store, args.session, args.state_version)
+        elif args.command == "lesson" and args.lesson_command == "revise":
+            result = apply_lesson_revision(
+                store, load_json(Path(args.file)), args.session
+            )
+        elif args.command == "lesson" and args.lesson_command == "feedback":
+            result = submit_lesson_feedback(
+                store, args.session, args.text, args.feedback_id,
+                args.lesson_id, args.base_revision, args.state_version,
+            )
+        elif args.command == "lesson" and args.lesson_command == "complete":
+            result = complete_teaching_lesson(
+                store, args.session, args.lesson_id, args.state_version,
+            )
         elif args.command == "pending":
             result = pending_reviews(store, args.session)
         elif args.command == "review":

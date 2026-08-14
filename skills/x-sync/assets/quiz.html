@@ -15,12 +15,13 @@
       --accent: #146c5a;
       --accent-soft: #e3f2ec;
       --warn: #99541f;
+      --warn-soft: #fff4df;
       --danger: #a33a37;
       font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     }
     * { box-sizing: border-box; }
     body { margin: 0; color: var(--ink); background: var(--paper); }
-    .shell { width: min(860px, calc(100% - 32px)); margin: 0 auto; padding: 36px 0 72px; }
+    .shell { width: min(920px, calc(100% - 32px)); margin: 0 auto; padding: 36px 0 72px; }
     header { display: flex; justify-content: space-between; gap: 24px; align-items: flex-start; margin-bottom: 24px; }
     .eyebrow { margin: 0 0 8px; color: var(--accent); font-size: .75rem; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
     h1 { margin: 0; font-size: clamp(1.8rem, 5vw, 3rem); line-height: 1.05; }
@@ -34,16 +35,42 @@
     .choice { display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: start; margin: 10px 0; padding: 14px 16px; border: 1px solid var(--line); border-radius: 12px; cursor: pointer; }
     .choice:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
     textarea { width: 100%; min-height: 130px; resize: vertical; padding: 14px; color: inherit; background: #fff; border: 1px solid var(--line); border-radius: 12px; font: inherit; line-height: 1.55; }
+    textarea:focus-visible, button:focus-visible, input:focus-visible { outline: 3px solid rgba(20, 108, 90, .2); outline-offset: 2px; }
     .field { margin-top: 22px; }
     .confidence { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
     .confidence label { margin: 0; padding: 10px 6px; text-align: center; border: 1px solid var(--line); border-radius: 10px; cursor: pointer; font-size: .8rem; }
     .confidence label:has(input:checked) { color: #fff; background: var(--accent); border-color: var(--accent); }
     .confidence input { position: absolute; opacity: 0; pointer-events: none; }
-    button { margin-top: 26px; padding: 12px 18px; color: #fff; background: var(--accent); border: 0; border-radius: 11px; font: inherit; font-weight: 800; cursor: pointer; }
-    button:disabled { cursor: wait; opacity: .55; }
+    .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 26px; }
+    button { padding: 12px 18px; color: #fff; background: var(--accent); border: 1px solid var(--accent); border-radius: 11px; font: inherit; font-weight: 800; cursor: pointer; }
+    button.secondary { color: var(--accent); background: #fff; }
+    button:disabled { cursor: not-allowed; opacity: .55; }
     .message { margin-top: 18px; padding: 12px 14px; border-radius: 10px; color: var(--muted); background: #f1f3f1; }
     .message[data-kind="error"] { color: var(--danger); background: #fbeceb; }
     .message[data-kind="saved"] { color: var(--accent); background: var(--accent-soft); }
+    .lesson-card { padding: 0; overflow: hidden; }
+    .lesson-stop { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 18px clamp(22px, 5vw, 40px); color: var(--warn); background: var(--warn-soft); border-bottom: 1px solid #efd9b4; font-weight: 800; }
+    .h4-badge { display: inline-flex; min-width: 44px; min-height: 32px; align-items: center; justify-content: center; color: #fff; background: var(--warn); border-radius: 999px; letter-spacing: .08em; }
+    .lesson-head { padding: clamp(28px, 6vw, 52px) clamp(22px, 6vw, 54px) 28px; border-bottom: 1px solid var(--line); }
+    .lesson-head h2 { max-width: 760px; margin-bottom: 12px; font-size: clamp(1.7rem, 5vw, 2.8rem); line-height: 1.12; }
+    .lesson-subtitle { max-width: 720px; margin: 0; color: var(--muted); font-size: 1.05rem; line-height: 1.7; white-space: pre-wrap; }
+    .lesson-revision { margin-top: 18px; color: var(--accent); font-size: .8rem; font-weight: 800; letter-spacing: .06em; }
+    .lesson-article { padding: 8px clamp(22px, 6vw, 54px) 12px; }
+    .lesson-section { padding: 36px 0; border-bottom: 1px solid var(--line); }
+    .lesson-section:last-of-type { border-bottom: 0; }
+    .lesson-section h3 { margin: 0 0 18px; font-size: clamp(1.25rem, 3vw, 1.75rem); line-height: 1.3; }
+    .lesson-section p, .lesson-conclusion p, .lesson-reflection p { margin: 12px 0; line-height: 1.8; white-space: pre-wrap; }
+    .lesson-points { display: grid; gap: 10px; margin: 20px 0 0; padding-left: 22px; }
+    .lesson-points li { padding-left: 4px; line-height: 1.65; }
+    .lesson-diagram { margin: 22px 0 0; padding: 18px; overflow-x: auto; color: #dcebe4; background: #17211d; border-radius: 13px; font: 500 .86rem/1.65 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; white-space: pre-wrap; }
+    .lesson-conclusion, .lesson-reflection { margin: 18px 0; padding: 24px; border-radius: 16px; }
+    .lesson-conclusion { background: var(--accent-soft); }
+    .lesson-reflection { background: #f2f3f1; }
+    .lesson-conclusion h3, .lesson-reflection h3 { margin: 0 0 8px; font-size: 1rem; }
+    .lesson-feedback-box { padding: 30px clamp(22px, 6vw, 54px) clamp(30px, 6vw, 50px); background: #f7f7f3; border-top: 1px solid var(--line); }
+    .lesson-feedback-box h3 { margin: 0 0 8px; font-size: 1.2rem; }
+    .lesson-feedback-box > p { margin: 0 0 18px; color: var(--muted); line-height: 1.65; }
+    .lesson-feedback-box textarea { background: var(--card); }
     .empty { text-align: center; padding: 56px 20px; }
     .empty p { color: var(--muted); line-height: 1.6; }
     footer { margin-top: 20px; color: var(--muted); font-size: .82rem; line-height: 1.55; }
@@ -54,6 +81,8 @@
       .status { display: inline-block; margin-top: 18px; }
       .confidence { grid-template-columns: 1fr; }
       .confidence label { text-align: left; }
+      .actions { display: grid; }
+      .actions button { width: 100%; }
     }
   </style>
 </head>
@@ -67,7 +96,7 @@
       <div class="status" id="connection">正在连接…</div>
     </header>
 
-    <section class="card" id="quiz" hidden>
+    <section class="card" id="quiz" aria-labelledby="prompt" hidden>
       <div class="meta" id="meta"></div>
       <h2 id="prompt"></h2>
       <form id="answer-form">
@@ -93,33 +122,78 @@
             <label><input type="radio" name="confidence" value="5">5 · 可向他人解释</label>
           </div>
         </fieldset>
-        <button id="submit" type="submit">保存答案</button>
+        <div class="actions">
+          <button id="submit" type="submit">保存答案</button>
+          <button id="unknown-answer" type="button" class="secondary">我不知道，告诉我</button>
+        </div>
       </form>
       <div class="message" id="message" hidden></div>
     </section>
 
+    <section class="card lesson-card" id="lesson-page" aria-labelledby="lesson-title" hidden>
+      <div class="lesson-stop">
+        <span class="h4-badge">H4</span>
+        <span>测试已中断 · 进入针对性教学</span>
+      </div>
+      <div class="lesson-head">
+        <p class="eyebrow">Dedicated learning page</p>
+        <h2 id="lesson-title"></h2>
+        <p class="lesson-subtitle" id="lesson-subtitle"></p>
+        <div class="lesson-revision" id="lesson-revision"></div>
+      </div>
+      <article class="lesson-article" id="lesson-article"></article>
+      <div class="lesson-feedback-box">
+        <h3>哪里还没讲清楚？</h3>
+        <p>指出具体断点，保存后回到终端让当前 Agent 根据你的反馈修订这份教学文章。</p>
+        <label for="lesson-feedback">给教学内容的反馈</label>
+        <textarea id="lesson-feedback" maxlength="12000" placeholder="例如：我理解了操作步骤，但还不清楚第二步为什么必须发生在事务内。"></textarea>
+        <div class="actions">
+          <button id="save-lesson-feedback" type="button">保存反馈</button>
+          <button id="lesson-understood" type="button" class="secondary">我已经懂了</button>
+        </div>
+        <div class="message" id="lesson-message" role="status" aria-live="polite" hidden></div>
+      </div>
+    </section>
+
     <section class="card empty" id="empty">
       <h2 id="empty-title">正在读取当前题目</h2>
-      <p id="empty-copy">页面只保存答案，不接收答案键。保存后请回到终端对 Codex 或 Claude Code 说“继续”。</p>
+      <p id="empty-copy">正式保存答案后，请回到终端说“继续”。</p>
     </section>
 
     <footer>
-      服务仅监听本机回环地址。访问令牌保存在当前标签页的 sessionStorage 中，不写入 URL 查询参数或学习记录。
+      服务仅监听本机回环地址。访问令牌与未提交草稿只保存在当前标签页的 sessionStorage 中；令牌不会留在 URL 查询参数或学习记录中。
     </footer>
   </main>
 
   <script>
     (() => {
       const $ = (id) => document.getElementById(id);
+      const TOKEN_KEY = "x-sync-token";
+      const DRAFT_PREFIX = "x-sync-draft:";
       const fragment = new URLSearchParams(location.hash.slice(1));
       const tokenFromUrl = fragment.get("token");
+      let token = tokenFromUrl || "";
       if (tokenFromUrl) {
-        sessionStorage.setItem("x-sync-token", tokenFromUrl);
+        try { sessionStorage.setItem(TOKEN_KEY, tokenFromUrl); } catch (_error) { /* memory fallback */ }
         history.replaceState(null, "", location.pathname + location.search);
       }
-      const token = sessionStorage.getItem("x-sync-token") || "";
+      if (!token) {
+        try { token = sessionStorage.getItem(TOKEN_KEY) || ""; } catch (_error) { token = ""; }
+      }
+
       let snapshot = null;
       let questionKey = "";
+      let questionDraftKey = "";
+      let lessonKey = "";
+      let lessonDraftKey = "";
+      let answerSaving = false;
+      let feedbackSaving = false;
+      let lessonCompleting = false;
+      let mutationInFlight = false;
+      let waitingForRevision = null;
+      let pollRequestSequence = 0;
+      let latestAppliedPollSequence = 0;
+      let latestStateVersion = -1;
 
       function authHeaders(json = false) {
         const headers = { "Authorization": `Bearer ${token}` };
@@ -129,20 +203,126 @@
 
       function text(el, value) { el.textContent = value == null ? "" : String(value); }
 
-      function showMessage(value, kind = "") {
-        const el = $("message");
+      function showMessageFor(id, value, kind = "") {
+        const el = $(id);
         text(el, value);
         el.dataset.kind = kind;
         el.hidden = !value;
       }
 
+      function showMessage(value, kind = "") {
+        showMessageFor("message", value, kind);
+      }
+
+      function showLessonMessage(value, kind = "") {
+        showMessageFor("lesson-message", value, kind);
+      }
+
+      function storageGet(key) {
+        if (!key) return null;
+        try {
+          const raw = sessionStorage.getItem(key);
+          return raw ? JSON.parse(raw) : null;
+        } catch (_error) {
+          return null;
+        }
+      }
+
+      function storageSet(key, value) {
+        if (!key) return;
+        try { sessionStorage.setItem(key, JSON.stringify(value)); } catch (_error) { /* best effort */ }
+      }
+
+      function storageRemove(key) {
+        if (!key) return;
+        try { sessionStorage.removeItem(key); } catch (_error) { /* best effort */ }
+      }
+
+      function stateVersion(payload = snapshot) {
+        const session = payload?.session || payload?.state || {};
+        return session.state_version ?? payload?.state_version;
+      }
+
+      function freshId() {
+        if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
+        const bytes = crypto.getRandomValues(new Uint8Array(16));
+        return Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join("");
+      }
+
+      function draftScope(payload, itemId, suffix) {
+        const sessionId = payload?.session_id || payload?.session?.session_id || "active";
+        return `${DRAFT_PREFIX}${suffix}:${sessionId}:${itemId}`;
+      }
+
+      function activeQuestionKey(payload, question) {
+        const version = question.version ?? 1;
+        const turn = question.probe || "initial";
+        return `${question.id}:${version}:${turn}`;
+      }
+
+      function clearAnswerForTeaching(payload) {
+        storageRemove(questionDraftKey);
+        $("answer-form").reset();
+        questionKey = "";
+        questionDraftKey = "";
+        const question = payload?.question;
+        if (question) {
+          storageRemove(draftScope(payload, activeQuestionKey(payload, question), "answer"));
+        }
+      }
+
+      function persistAnswerDraft() {
+        if (!questionDraftKey || !snapshot?.question) return;
+        const formData = new FormData($("answer-form"));
+        const next = {
+          choice: formData.get("answer") || "",
+          freeText: $("free-answer").value,
+          reason: $("reason").value,
+          confidence: formData.get("confidence") || ""
+        };
+        const previous = storageGet(questionDraftKey) || {};
+        const unchanged = previous.choice === next.choice &&
+          previous.freeText === next.freeText &&
+          previous.reason === next.reason &&
+          previous.confidence === next.confidence;
+        storageSet(questionDraftKey, {
+          ...next,
+          attemptId: unchanged ? (previous.attemptId || "") : ""
+        });
+      }
+
+      function restoreAnswerDraft() {
+        const draft = storageGet(questionDraftKey);
+        if (!draft || typeof draft !== "object") return;
+        $("free-answer").value = typeof draft.freeText === "string" ? draft.freeText : "";
+        $("reason").value = typeof draft.reason === "string" ? draft.reason : "";
+        for (const input of document.querySelectorAll('#answer-form input[name="answer"]')) {
+          input.checked = input.value === String(draft.choice || "");
+        }
+        for (const input of document.querySelectorAll('#answer-form input[name="confidence"]')) {
+          input.checked = input.value === String(draft.confidence || "");
+        }
+      }
+
+      function persistLessonDraft() {
+        if (!lessonDraftKey || !snapshot?.lesson) return;
+        const previous = storageGet(lessonDraftKey) || {};
+        const value = $("lesson-feedback").value;
+        storageSet(lessonDraftKey, {
+          text: value,
+          feedbackId: previous.text === value ? (previous.feedbackId || "") : "",
+          baseRevision: snapshot.lesson.revision
+        });
+      }
+
       function renderMeta(session, question) {
+        const topics = Array.isArray(question.topics) ? question.topics.join(" · ") : question.topic;
         const items = [
           `${(session.current_index ?? 0) + 1} / ${session.total ?? "?"}`,
           (question.domain || question.axis) === "business" ? "业务" : "技术",
           String(question.depth ?? question.level ?? "L0").replace(/^L?(\d+)$/, "L$1"),
           (session.style || session.mode) === "socratic" ? "苏格拉底" : "常规问答",
-          question.topic || "未分类"
+          topics || "未分类"
         ];
         const meta = $("meta");
         meta.replaceChildren(...items.map((value) => {
@@ -153,11 +333,28 @@
         }));
       }
 
-      function render(payload) {
-        snapshot = payload;
+      function buildChoices(question) {
+        const list = $("choice-list");
+        list.replaceChildren();
+        for (const choice of question.choices || []) {
+          const label = document.createElement("label");
+          label.className = "choice";
+          const input = document.createElement("input");
+          input.type = "radio";
+          input.name = "answer";
+          input.value = choice.id;
+          input.required = true;
+          const copy = document.createElement("span");
+          text(copy, `${choice.id}. ${choice.text}`);
+          label.append(input, copy);
+          list.append(label);
+        }
+      }
+
+      function renderQuiz(payload) {
         const session = payload.session || payload.state || {};
         const question = payload.question || null;
-        text($("connection"), "已连接");
+        $("lesson-page").hidden = true;
 
         if (!question || session.status === "completed") {
           $("quiz").hidden = true;
@@ -169,87 +366,215 @@
           return;
         }
 
-        const key = `${question.id}:${question.probe || "initial"}:${session.state_version}`;
-        if (key !== questionKey) {
-          $("answer-form").reset();
-          showMessage("");
-          questionKey = key;
-        }
         $("empty").hidden = true;
         $("quiz").hidden = false;
         renderMeta(session, question);
-        const activePrompt = question.probe
+        text($("prompt"), question.probe
           ? `追问：${question.probe}`
-          : (question.display_prompt || question.prompt);
-        text($("prompt"), activePrompt);
+          : (question.display_prompt || question.prompt));
 
+        const nextQuestionKey = activeQuestionKey(payload, question);
         const isChoice = question.type === "single_choice";
         $("choices").hidden = !isChoice;
         $("free-field").hidden = isChoice;
         $("reason-field").hidden = !isChoice && (session.style || session.mode) !== "socratic";
-        const list = $("choice-list");
-        list.replaceChildren();
-        if (isChoice) {
-          for (const choice of question.choices || []) {
-            const label = document.createElement("label");
-            label.className = "choice";
-            const input = document.createElement("input");
-            input.type = "radio";
-            input.name = "answer";
-            input.value = choice.id;
-            input.required = true;
-            const copy = document.createElement("span");
-            text(copy, `${choice.id}. ${choice.text}`);
-            label.append(input, copy);
-            list.append(label);
-          }
-          const unknown = document.createElement("label");
-          unknown.className = "choice";
-          const unknownInput = document.createElement("input");
-          unknownInput.type = "radio";
-          unknownInput.name = "answer";
-          unknownInput.value = "unknown";
-          unknownInput.required = true;
-          const unknownCopy = document.createElement("span");
-          text(unknownCopy, "不知道 / 当前证据不足");
-          unknown.append(unknownInput, unknownCopy);
-          list.append(unknown);
+        if (nextQuestionKey !== questionKey) {
+          questionKey = nextQuestionKey;
+          questionDraftKey = draftScope(payload, nextQuestionKey, "answer");
+          $("answer-form").reset();
+          buildChoices(question);
+          restoreAnswerDraft();
+          showMessage("");
         }
 
-        const pending = payload.pending_attempt || session.pending_attempt ||
+        const pending = Boolean(payload.pending_attempt || session.pending_attempt) ||
           ["answer_saved", "agent_review_pending", "reviewed"].includes(session.status);
+        $("submit").disabled = pending || answerSaving;
+        $("unknown-answer").disabled = pending || answerSaving;
         if (pending) {
-          $("submit").disabled = true;
           showMessage("答案已保存。请回到终端说“继续”进行检查。", "saved");
-        } else {
-          $("submit").disabled = false;
         }
+      }
+
+      function addLessonSection(container, section) {
+        const block = document.createElement("section");
+        block.className = "lesson-section";
+        const eyebrow = document.createElement("p");
+        eyebrow.className = "eyebrow";
+        text(eyebrow, section.eyebrow);
+        const heading = document.createElement("h3");
+        text(heading, section.title);
+        block.append(eyebrow, heading);
+
+        for (const paragraph of Array.isArray(section.paragraphs) ? section.paragraphs : []) {
+          const copy = document.createElement("p");
+          text(copy, paragraph);
+          block.append(copy);
+        }
+        const points = Array.isArray(section.points) ? section.points : [];
+        if (points.length) {
+          const list = document.createElement("ul");
+          list.className = "lesson-points";
+          for (const point of points) {
+            const item = document.createElement("li");
+            text(item, point);
+            list.append(item);
+          }
+          block.append(list);
+        }
+        if (section.diagram) {
+          const diagram = document.createElement("pre");
+          diagram.className = "lesson-diagram";
+          text(diagram, section.diagram);
+          block.append(diagram);
+        }
+        container.append(block);
+      }
+
+      function addLessonClosing(container, className, headingText, copyText) {
+        const block = document.createElement("section");
+        block.className = className;
+        const heading = document.createElement("h3");
+        text(heading, headingText);
+        const copy = document.createElement("p");
+        text(copy, copyText);
+        block.append(heading, copy);
+        container.append(block);
+      }
+
+      function lessonHasPendingFeedback(lesson) {
+        return lesson.feedback_pending === true ||
+          (lesson.feedback_pending && typeof lesson.feedback_pending === "object");
+      }
+
+      function waitingOnLesson(lesson) {
+        return Boolean(waitingForRevision &&
+          waitingForRevision.lessonId === lesson.lesson_id &&
+          Number(lesson.revision) <= waitingForRevision.baseRevision);
+      }
+
+      function syncLessonControls(lesson) {
+        const locked = lessonHasPendingFeedback(lesson) || waitingOnLesson(lesson) ||
+          feedbackSaving || lessonCompleting;
+        $("lesson-feedback").disabled = locked;
+        $("save-lesson-feedback").disabled = locked || !$("lesson-feedback").value.trim();
+        $("lesson-understood").disabled = locked;
+      }
+
+      function renderLesson(payload) {
+        clearAnswerForTeaching(payload);
+        const lesson = payload.lesson;
+        const lessonDocument = lesson?.document || {};
+        $("quiz").hidden = true;
+        $("empty").hidden = true;
+        $("lesson-page").hidden = false;
+        text($("connection"), "已连接 · H4 教学");
+        text($("lesson-title"), lessonDocument.title);
+        text($("lesson-subtitle"), lessonDocument.subtitle);
+        text($("lesson-revision"), `H${lesson.hint_level ?? 4} · 教学修订 r${lesson.revision ?? 1}`);
+
+        const article = $("lesson-article");
+        article.replaceChildren();
+        const sections = Array.isArray(lessonDocument.sections) ? lessonDocument.sections.slice(0, 3) : [];
+        for (const section of sections) addLessonSection(article, section || {});
+        addLessonClosing(article, "lesson-conclusion", "结论", lessonDocument.conclusion);
+        addLessonClosing(article, "lesson-reflection", "理解检查", lessonDocument.reflection_prompt);
+
+        const nextLessonKey = `${lesson.lesson_id}:${lesson.revision}`;
+        const lessonChanged = nextLessonKey !== lessonKey;
+        if (lessonChanged) {
+          lessonKey = nextLessonKey;
+          lessonDraftKey = draftScope(payload, nextLessonKey, "lesson");
+          const draft = storageGet(lessonDraftKey);
+          const pendingText = lesson.feedback_pending && typeof lesson.feedback_pending === "object"
+            ? lesson.feedback_pending.text : "";
+          $("lesson-feedback").value = pendingText ||
+            (draft && typeof draft.text === "string" ? draft.text : "");
+          showLessonMessage("");
+        }
+
+        const revisionArrived = waitingForRevision &&
+          waitingForRevision.lessonId === lesson.lesson_id &&
+          Number(lesson.revision) > waitingForRevision.baseRevision &&
+          !lessonHasPendingFeedback(lesson);
+        if (revisionArrived) {
+          waitingForRevision = null;
+          showLessonMessage("教学内容已根据反馈更新。请重新阅读；仍有断点可以继续反馈。", "saved");
+        } else if (lessonHasPendingFeedback(lesson) || waitingOnLesson(lesson)) {
+          showLessonMessage("反馈已保存。回到终端说“继续”，完成修订后本页会自动刷新。", "saved");
+        }
+        syncLessonControls(lesson);
+      }
+
+      function render(payload) {
+        if (!payload || typeof payload !== "object") return false;
+        const incomingVersion = Number(stateVersion(payload));
+        if (Number.isFinite(incomingVersion) && incomingVersion < latestStateVersion) return false;
+        if (Number.isFinite(incomingVersion)) latestStateVersion = incomingVersion;
+        snapshot = payload;
+        text($("connection"), "已连接");
+        const targetPath = payload.view === "lesson" ? "/lesson" : "/";
+        if (location.pathname !== targetPath) {
+          history.replaceState(null, "", targetPath + location.search);
+        }
+        if (payload.view === "lesson" && payload.lesson) {
+          renderLesson(payload);
+        } else {
+          renderQuiz(payload);
+        }
+        return true;
+      }
+
+      async function responsePayload(response, fallback) {
+        let result = {};
+        try { result = await response.json(); } catch (_error) { result = {}; }
+        if (!response.ok) {
+          const error = new Error(result.message || result.error || `${fallback}（${response.status}）`);
+          error.status = response.status;
+          throw error;
+        }
+        return result;
+      }
+
+      function startMutation() {
+        mutationInFlight = true;
+        pollRequestSequence += 1;
       }
 
       async function refresh() {
+        if (mutationInFlight) return false;
         if (!token) throw new Error("缺少访问令牌，请重新打开终端给出的完整地址。");
+        const requestSequence = ++pollRequestSequence;
         const response = await fetch("/api/v1/state", { headers: authHeaders() });
-        if (!response.ok) throw new Error(`读取状态失败（${response.status}）`);
-        render(await response.json());
+        const payload = await responsePayload(response, "读取状态失败");
+        if (requestSequence !== pollRequestSequence ||
+            requestSequence <= latestAppliedPollSequence) return false;
+        latestAppliedPollSequence = requestSequence;
+        return render(payload);
       }
 
-      $("answer-form").addEventListener("submit", async (event) => {
-        event.preventDefault();
-        const session = snapshot?.session || snapshot?.state || {};
-        const question = snapshot?.question || {};
-        const answer = question.type === "single_choice"
-          ? new FormData(event.currentTarget).get("answer")
-          : $("free-answer").value.trim();
-        const confidenceLevel = Number(new FormData(event.currentTarget).get("confidence"));
-        if (!answer || !confidenceLevel) return;
+      async function refreshAfterConflict(error, target) {
+        try { await refresh(); } catch (_refreshError) { /* retain the original error */ }
+        if (target === "lesson") showLessonMessage(error.message, "error");
+        else showMessage(error.message, "error");
+      }
+
+      async function saveAnswer(answer, confidenceLevel, reason) {
+        if (answerSaving || mutationInFlight) return;
+        const previousDraft = storageGet(questionDraftKey) || {};
+        const attemptId = previousDraft.attemptId || freshId();
+        storageSet(questionDraftKey, { ...previousDraft, attemptId });
+        answerSaving = true;
+        startMutation();
         $("submit").disabled = true;
+        $("unknown-answer").disabled = true;
         showMessage("正在保存…");
         const body = {
           answer,
-          reason: $("reason").value.trim(),
+          reason,
           confidence: (confidenceLevel - 1) / 4,
-          state_version: session.state_version ?? snapshot.state_version,
-          attempt_id: crypto.randomUUID()
+          state_version: stateVersion(),
+          attempt_id: attemptId
         };
         try {
           const response = await fetch("/api/v1/answer", {
@@ -257,17 +582,184 @@
             headers: authHeaders(true),
             body: JSON.stringify(body)
           });
-          if (response.status === 409) {
-            await refresh();
-            throw new Error("题目状态已经变化，页面已刷新，请重新确认答案。");
-          }
-          const result = await response.json();
-          if (!response.ok) throw new Error(result.message || `保存失败（${response.status}）`);
-          await refresh();
+          const result = await responsePayload(response, "保存失败");
+          answerSaving = false;
+          mutationInFlight = false;
+          storageRemove(questionDraftKey);
+          render(result);
         } catch (error) {
-          $("submit").disabled = false;
-          showMessage(error.message, "error");
+          answerSaving = false;
+          mutationInFlight = false;
+          if (error.status === 409) {
+            error.message = "题目状态已经变化，页面已刷新，请重新确认答案。";
+            await refreshAfterConflict(error, "quiz");
+          } else {
+            renderQuiz(snapshot || {});
+            showMessage(error.message, "error");
+          }
         }
+      }
+
+      async function requestTeaching() {
+        if (answerSaving || mutationInFlight) return;
+        persistAnswerDraft();
+        answerSaving = true;
+        startMutation();
+        $("submit").disabled = true;
+        $("unknown-answer").disabled = true;
+        showMessage("正在准备 H4 针对性教学…");
+        try {
+          const response = await fetch("/api/v1/teach", {
+            method: "POST",
+            headers: authHeaders(true),
+            body: JSON.stringify({ state_version: stateVersion() })
+          });
+          const result = await responsePayload(response, "读取教学内容失败");
+          answerSaving = false;
+          mutationInFlight = false;
+          render(result);
+        } catch (error) {
+          answerSaving = false;
+          mutationInFlight = false;
+          if (error.status === 409) {
+            await refreshAfterConflict(error, "quiz");
+          } else {
+            renderQuiz(snapshot || {});
+            showMessage(error.message, "error");
+          }
+        }
+      }
+
+      async function saveLessonFeedback() {
+        const lesson = snapshot?.lesson;
+        const feedbackText = $("lesson-feedback").value.trim();
+        if (!lesson || snapshot.view !== "lesson" || !feedbackText || feedbackSaving ||
+            lessonCompleting || mutationInFlight || lessonHasPendingFeedback(lesson) ||
+            waitingOnLesson(lesson)) return;
+
+        const storedDraft = storageGet(lessonDraftKey) || {};
+        const feedbackId = storedDraft.feedbackId &&
+          storedDraft.text === $("lesson-feedback").value &&
+          Number(storedDraft.baseRevision) === Number(lesson.revision)
+          ? storedDraft.feedbackId : freshId();
+        storageSet(lessonDraftKey, {
+          text: $("lesson-feedback").value,
+          feedbackId,
+          baseRevision: lesson.revision
+        });
+        feedbackSaving = true;
+        startMutation();
+        syncLessonControls(lesson);
+        showLessonMessage("正在保存反馈…");
+        const body = {
+          lesson_id: lesson.lesson_id,
+          base_revision: lesson.revision,
+          text: feedbackText,
+          feedback_id: feedbackId,
+          state_version: stateVersion()
+        };
+        try {
+          const response = await fetch("/api/v1/lesson/feedback", {
+            method: "POST",
+            headers: authHeaders(true),
+            body: JSON.stringify(body)
+          });
+          const result = await responsePayload(response, "保存反馈失败");
+          feedbackSaving = false;
+          mutationInFlight = false;
+          storageRemove(lessonDraftKey);
+          waitingForRevision = {
+            lessonId: lesson.lesson_id,
+            baseRevision: Number(lesson.revision)
+          };
+          render(result);
+          showLessonMessage("反馈已保存。回到终端说“继续”，完成修订后本页会自动刷新。", "saved");
+          if (snapshot?.view === "lesson" && snapshot.lesson) syncLessonControls(snapshot.lesson);
+        } catch (error) {
+          feedbackSaving = false;
+          mutationInFlight = false;
+          if (error.status === 409) {
+            await refreshAfterConflict(error, "lesson");
+          } else {
+            if (snapshot?.lesson) syncLessonControls(snapshot.lesson);
+            showLessonMessage(error.message, "error");
+          }
+        }
+      }
+
+      async function completeLesson() {
+        const lesson = snapshot?.lesson;
+        if (!lesson || snapshot.view !== "lesson" || feedbackSaving || lessonCompleting ||
+            mutationInFlight || lessonHasPendingFeedback(lesson) || waitingOnLesson(lesson)) return;
+        lessonCompleting = true;
+        startMutation();
+        syncLessonControls(lesson);
+        showLessonMessage("正在返回原题…");
+        const body = {
+          lesson_id: lesson.lesson_id,
+          state_version: stateVersion()
+        };
+        try {
+          const response = await fetch("/api/v1/lesson/complete", {
+            method: "POST",
+            headers: authHeaders(true),
+            body: JSON.stringify(body)
+          });
+          const result = await responsePayload(response, "结束教学失败");
+          lessonCompleting = false;
+          mutationInFlight = false;
+          storageRemove(lessonDraftKey);
+          lessonKey = "";
+          lessonDraftKey = "";
+          render(result);
+          if (result.view === "quiz") {
+            if (result.teaching_invalidated) {
+              showMessage(result.teaching_invalidated.message ||
+                "仓库证据已变化，本次教学已关闭；请回到终端重新校验题库。", "error");
+            } else {
+              showMessage("教学已完成。请根据现在的理解正式回答原题。", "saved");
+            }
+          }
+        } catch (error) {
+          lessonCompleting = false;
+          mutationInFlight = false;
+          if (error.status === 409) {
+            await refreshAfterConflict(error, "lesson");
+          } else {
+            if (snapshot?.lesson) syncLessonControls(snapshot.lesson);
+            showLessonMessage(error.message, "error");
+          }
+        }
+      }
+
+      $("answer-form").addEventListener("input", persistAnswerDraft);
+      $("answer-form").addEventListener("change", persistAnswerDraft);
+      $("answer-form").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const question = snapshot?.question || {};
+        const formData = new FormData(event.currentTarget);
+        const answer = question.type === "single_choice"
+          ? formData.get("answer")
+          : $("free-answer").value.trim();
+        const confidenceLevel = Number(formData.get("confidence"));
+        if (!answer || !confidenceLevel) return;
+        persistAnswerDraft();
+        await saveAnswer(answer, confidenceLevel, $("reason").value.trim());
+      });
+
+      $("unknown-answer").addEventListener("click", async () => {
+        await requestTeaching();
+      });
+
+      $("lesson-feedback").addEventListener("input", () => {
+        persistLessonDraft();
+        if (snapshot?.view === "lesson" && snapshot.lesson) syncLessonControls(snapshot.lesson);
+      });
+      $("save-lesson-feedback").addEventListener("click", saveLessonFeedback);
+      $("lesson-understood").addEventListener("click", completeLesson);
+
+      document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "visible") refresh().catch(() => {});
       });
 
       refresh().catch((error) => {
