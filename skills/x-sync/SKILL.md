@@ -1,6 +1,6 @@
 ---
 name: x-sync
-description: Assess and improve how well a person, an AI agent, and the current repository agree on task-relevant business and technical knowledge. Resume any unfinished session first. Otherwise, before the first new session, scan the safe whole project before selecting a bank; a bare $x-sync or /x-sync then opens a local interactive HTML quiz with Socratic dialogue, mixed business and technical coverage, and 5 questions. Use for repository onboarding, knowledge checks, architecture or incident review, pre-agent task readiness, and spaced review grounded in specs, stories, commits, bug fixes, code, tests, infrastructure, and official technology sources. Do not use as an employee ranking tool or claim that one score measures understanding of an entire repository.
+description: Assess and improve how well a person, an AI agent, and the current or explicitly selected target repository agree on task-relevant business and technical knowledge. Accept `-d <target-project>` with $x-sync or /x-sync when the questions should target another project. Resume any unfinished session in that target first. Otherwise, before the first new session, scan the safe whole project before selecting a bank; a bare invocation then opens a local interactive HTML quiz with Socratic dialogue, mixed business and technical coverage, and 5 questions. Use for repository onboarding, knowledge checks, architecture or incident review, pre-agent task readiness, and spaced review grounded in specs, stories, commits, bug fixes, code, tests, infrastructure, and official technology sources. Do not use as an employee ranking tool or claim that one score measures understanding of an entire repository.
 ---
 
 # X-Sync
@@ -17,9 +17,15 @@ python3 <skill-dir>/scripts/xsync.py <command>
 
 Never assume a Codex- or Claude-specific environment variable exists. Resolve relative references and scripts from `<skill-dir>`.
 
+## Resolve the target project
+
+Accept `-d <target-project>` on the skill invocation, for example `$x-sync -d ../payments`, `/x-sync -d "/work/payment service"`, or `/x-sync:x-sync -d ../payments` from the Claude plugin. Accept `--repo <target-project>` as the descriptive long form. Treat the selected directory as the project whose repository evidence, question bank, sessions, and `.x-sync/` data are in scope. If neither form is present, use the host's current working directory.
+
+Resolve `~` and relative paths from the host's current working directory, then let `doctor` canonicalize a path inside a Git worktree to its repository root. A selected subdirectory therefore means the whole containing Git worktree; `-d` is not a monorepo subtree filter. Use the user's task description to narrow a monorepo assessment. Propagate the canonical target to every runtime command and retain it for `继续` or other follow-ups in the active conversation. A later explicit `-d` selects a different target. The runtime accepts `-d TARGET_PROJECT` as a short alias of `--repo TARGET_PROJECT`; the examples below keep the descriptive long form. Quote paths containing spaces. Never fall back to the current directory when an explicit target is missing or invalid, and never generate questions from the skill source repository merely because it contains `SKILL.md`.
+
 ## Start every invocation
 
-1. Run `doctor --repo <repo> --json`. Use a learner explicitly named by the user; otherwise use `default_learner` from the result. Explain the private local `.x-sync/` record only when creating that learner's first profile.
+1. Resolve the target project, then run `doctor --repo <repo> --json`. Use a learner explicitly named by the user; otherwise use `default_learner` from the result. Explain the private local `.x-sync/` record only when creating that learner's first profile.
 2. Run `status --repo <repo> --learner <learner> --json`.
 3. Resume an unfinished active session instead of replacing it. Treat `question_open`, `teaching_open`, `teaching_feedback_saved`, `answer_saved`, `agent_review_pending`, and `reviewed` as unfinished and preserve its stored configuration. If its stored channel is `web`, reopen its page with `serve --session <id> --port 0 --open`; if it is `terminal`, present or review it in the Agent terminal and do not call `serve`. Start a new session only when none exists, the active session is `completed`, or the user explicitly requests a new round.
 4. Before preparing any new session, inspect `status.repository_scan`. If `initial_scan_complete` is not `true`, run the mandatory first-use scan before checking an installed bank or generating a new one:

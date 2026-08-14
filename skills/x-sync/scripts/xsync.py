@@ -4510,7 +4510,10 @@ def parser() -> argparse.ArgumentParser:
     sub = root.add_subparsers(dest="command", required=True)
 
     def repo_arg(p):
-        p.add_argument("--repo", default=".")
+        p.add_argument(
+            "-d", "--repo", dest="repo", default=".", metavar="TARGET_PROJECT",
+            help="target project directory to assess (default: current directory)",
+        )
 
     def json_arg(p):
         p.add_argument("--json", action="store_true", help=argparse.SUPPRESS)

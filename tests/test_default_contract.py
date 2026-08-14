@@ -80,6 +80,18 @@ class DefaultInvocationContractTest(unittest.TestCase):
         self.assertIn("苏格拉底模式", self.readme)
         self.assertIn("5 道题", self.readme)
 
+    def test_explicit_target_project_short_flag_is_end_to_end(self):
+        self.assertIn("`-d <target-project>`", self.skill)
+        self.assertIn("short alias of `--repo TARGET_PROJECT`", self.skill)
+        self.assertIn("Propagate the canonical target to every runtime command", self.skill)
+        self.assertIn("-d <target-project>", self.openai)
+        self.assertIn("$x-sync -d /path/to/target-project", self.readme)
+        self.assertIn("/x-sync -d ../target-project", self.readme)
+        self.assertIn("/x-sync:x-sync -d ../target-project", self.readme)
+        self.assertIn("问题只针对该目标项目", self.readme)
+        self.assertIn("retain it for `继续`", self.skill)
+        self.assertIn("后续“继续”也沿用它", self.readme)
+
 
 if __name__ == "__main__":
     unittest.main()

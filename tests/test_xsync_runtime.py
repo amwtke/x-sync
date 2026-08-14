@@ -1190,6 +1190,66 @@ class RuntimeTest(unittest.TestCase):
                           "decisions_bugs", "non_functional"},
                          set(report["human_repository_profile"]))
 
+    def test_target_project_short_flag_matches_repo_alias(self):
+        leaves = [
+            (["doctor"], []),
+            (["init"], ["--learner", "alice"]),
+            (["scan"], []),
+            (["evidence", "snapshot"], []),
+            (["bank", "validate"], ["--file", "bank.json"]),
+            (["bank", "install"], ["--learner", "alice", "--file", "bank.json"]),
+            (["start"], ["--learner", "alice", "--bank", "bank"]),
+            (["question"], ["--learner", "alice"]),
+            (["answer"], ["--learner", "alice", "--choice", "A", "--confidence", "0.5"]),
+            (["teach"], ["--learner", "alice"]),
+            (["lesson", "feedback"], ["--learner", "alice", "--lesson-id", "lesson.1", "--text", "ok"]),
+            (["lesson", "revise"], ["--learner", "alice", "--file", "revision.json"]),
+            (["lesson", "complete"], ["--learner", "alice", "--lesson-id", "lesson.1"]),
+            (["pending"], ["--learner", "alice"]),
+            (["review", "apply"], ["--learner", "alice", "--file", "review.json"]),
+            (["continue"], ["--learner", "alice"]),
+            (["status"], ["--learner", "alice"]),
+            (["report"], ["--learner", "alice"]),
+            (["serve"], ["--learner", "alice"]),
+        ]
+        for prefix, required in leaves:
+            with self.subTest(command=" ".join(prefix)):
+                short = xsync.parser().parse_args([
+                    *prefix, "-d", str(self.repo), *required,
+                ])
+                long = xsync.parser().parse_args([
+                    *prefix, "--repo", str(self.repo), *required,
+                ])
+                self.assertEqual(str(self.repo), short.repo)
+                self.assertEqual(long.repo, short.repo)
+        self.assertEqual(".", xsync.parser().parse_args(["doctor"]).repo)
+
+        with tempfile.TemporaryDirectory(prefix="x-sync target project ") as directory:
+            target = Path(directory)
+            subprocess.run(["git", "init", "-q", str(target)], check=True)
+            nested = target / "module with spaces"
+            nested.mkdir()
+            relative_target = os.path.relpath(nested, ROOT)
+            command = [
+                sys.executable, str(SCRIPT), "doctor", "-d", relative_target, "--json",
+            ]
+            result = subprocess.run(
+                command, cwd=ROOT, text=True, stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE, check=True,
+            )
+            doctor = json.loads(result.stdout)
+            self.assertEqual(str(target.resolve()), doctor["repo"])
+            self.assertEqual(xsync.repo_id(target), doctor["repo_id"])
+
+            missing = target / "missing"
+            failed = subprocess.run(
+                [sys.executable, str(SCRIPT), "doctor", "-d", str(missing), "--json"],
+                cwd=ROOT, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            )
+            self.assertEqual(2, failed.returncode)
+            self.assertIn("仓库目录不存在", failed.stderr)
+            self.assertNotIn(str(ROOT.resolve()), failed.stdout)
+
     def test_first_repository_scan_covers_the_entire_safe_engineering_tree(self):
         (self.repo / ".gitignore").write_text("ignored.txt\n", encoding="utf-8")
         (self.repo / "ignored.txt").write_text("do not inventory\n", encoding="utf-8")

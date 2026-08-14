@@ -70,6 +70,26 @@ $x-sync
 - 5 道题；
 - 从仓库证据中选择一个有边界的 onboarding 范围。
 
+要针对当前工作目录之外的项目出题，使用 `-d` 指定目标项目：
+
+```text
+$x-sync -d /path/to/target-project
+```
+
+Claude Code 中同样适用：
+
+```text
+/x-sync -d ../target-project
+```
+
+通过 Claude plugin 安装时使用：
+
+```text
+/x-sync:x-sync -d ../target-project
+```
+
+`-d` 会贯穿扫描、证据、题库、会话与报告全流程；问题只针对该目标项目，后续“继续”也沿用它。相对路径从宿主当前工作目录解析，Git 子目录会归一到仓库根目录，因此 `-d` 选择的是包含该目录的整个 Git worktree，并不是 monorepo 子目录过滤器；包含空格的路径需要加引号。底层 runtime 中，`-d TARGET_PROJECT` 是 `--repo TARGET_PROJECT` 的短别名。
+
 未完成的会话会优先恢复，不会被默认配置覆盖。准备第一个新会话前，X-Sync 必须先扫描整个安全工程目录，然后才会判断能否复用题库或需要生成新题库。扫描范围包含 Git 已跟踪和未忽略的未跟踪普通文件；每个合格文件都会被枚举、分类并计算内容指纹，再由 Agent 从文档、源码、测试、配置、迁移、基础设施与历史中选择有依据的问题。
 
 “整个工程”不等于读取已知的凭据文件或第三方缓存：`.git/`、`.x-sync/`、`.env*`、常见 secret/credential/token 配置和密钥、vendor/依赖与构建产物、Git ignored 文件、二进制、超大文件、符号链接及 submodule 都不会作为扫描内容打开。首次门禁完成后，后续调用不会仅因启动 X-Sync 就重复全量扫描；仓库或任务变化时仍会按状态和证据新鲜度定向刷新。完整扫描要求至少有一个 commit 的普通 Git worktree，非 Git 目录、unborn repository 或 sparse checkout 会明确停止。
