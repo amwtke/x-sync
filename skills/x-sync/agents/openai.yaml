@@ -1,7 +1,7 @@
 interface:
   display_name: "X-Sync"
   short_description: "用仓库证据持续校准工程师、Agent 与代码之间的理解"
-  default_prompt: "Use $x-sync to immediately start or resume a local interactive HTML assessment: Socratic, mixed business and technical, 5 questions."
+  default_prompt: "Use $x-sync to resume any unfinished session first. Otherwise, before the first new session, scan the safe whole project and then open a local interactive HTML assessment: Socratic, mixed business and technical, 5 questions."
 
 policy:
   allow_implicit_invocation: true

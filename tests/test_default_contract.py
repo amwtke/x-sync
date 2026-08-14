@@ -32,12 +32,49 @@ class DefaultInvocationContractTest(unittest.TestCase):
         self.assertIn("if it is `terminal`", self.skill)
         self.assertIn("do not call `serve`", self.skill)
 
+    def test_first_use_scans_the_safe_whole_project_before_bank_selection(self):
+        resume = self.skill.index("Resume an unfinished active session")
+        scan = self.skill.index("Before preparing any new session")
+        reuse = self.skill.index("Reuse an installed bank only after the first-scan gate")
+        self.assertLess(resume, scan)
+        self.assertLess(scan, reuse)
+        self.assertIn("scripts/xsync.py scan --repo <repo> --json", self.skill)
+        self.assertIn("initial_scan_complete", self.skill)
+        self.assertIn("A fresh installed bank never bypasses this first scan", self.skill)
+        self.assertIn("Every eligible Git-tracked or non-ignored untracked regular file", self.skill)
+        for exclusion in (
+            "`.git/`", "`.x-sync/`", "known secret/credential/token stores",
+            "vendored/generated dependency trees", "binaries", "oversized files",
+            "symlinks", "submodules", "paths outside the repository",
+        ):
+            with self.subTest(exclusion=exclusion):
+                self.assertIn(exclusion, self.skill)
+        self.assertIn("Never delay or alter unfinished-session recovery", self.skill)
+        self.assertIn("Later invocations do not repeat the full scan merely because they are bare", self.skill)
+
+    def test_readme_explains_first_scan_scope_and_first_only_behavior(self):
+        for phrase in (
+            "扫描整个安全工程目录",
+            "然后才会判断能否复用题库或需要生成新题库",
+            "Git 已跟踪和未忽略的未跟踪普通文件",
+            "后续调用不会仅因启动 X-Sync 就重复全量扫描",
+            "非 Git 目录、unborn repository 或 sparse checkout 会明确停止",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, self.readme)
+
     def test_codex_prompt_and_user_docs_match_bare_invocation(self):
         self.assertIn("$x-sync", self.openai)
         for phrase in ("interactive HTML", "Socratic", "mixed business and technical",
                        "5 questions"):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, self.openai)
+        self.assertIn("resume any unfinished session first", self.openai)
+        self.assertIn("before the first new session, scan the safe whole project", self.openai)
+        self.assertLess(
+            self.openai.index("resume any unfinished session first"),
+            self.openai.index("before the first new session"),
+        )
         self.assertIn("$x-sync\n```", self.readme)
         self.assertIn("/x-sync\n```", self.readme)
         self.assertIn("苏格拉底模式", self.readme)

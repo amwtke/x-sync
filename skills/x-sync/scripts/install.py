@@ -240,13 +240,33 @@ def validate_project_path(project_root: Path, target: Path) -> None:
         ) from exc
 
 
+def validate_user_path(user_root: Path, target: Path) -> None:
+    try:
+        relative = target.relative_to(user_root)
+    except ValueError as exc:
+        raise InstallError(f"user target is outside the home directory: {target}") from exc
+    cursor = user_root
+    for part in relative.parts[:-1]:
+        cursor /= part
+        if cursor.is_symlink():
+            raise InstallError(f"refusing user path with symlink parent: {cursor}")
+    try:
+        target.resolve(strict=False).relative_to(user_root.resolve(strict=False))
+    except ValueError as exc:
+        raise InstallError(f"resolved user target is outside the home directory: {target}") from exc
+
+
 def validate_target(
-    target: Path, host: str, scope: str, project_root: Path | None = None
+    target: Path, host: str, scope: str, scope_root: Path | None = None
 ) -> None:
     if scope == "project":
-        if project_root is None:
+        if scope_root is None:
             raise InstallError("project root is required for project scope")
-        validate_project_path(project_root, target)
+        validate_project_path(scope_root, target)
+    elif scope == "user":
+        if scope_root is None:
+            raise InstallError("user root is required for user scope")
+        validate_user_path(scope_root, target)
     if target.is_symlink():
         raise InstallError(f"refusing to replace symlink: {target}")
     if target.exists() and (
@@ -317,7 +337,7 @@ def run(args: argparse.Namespace) -> int:
     ]
     for host, target in plans:
         validate_target(
-            target, host, args.scope, root if args.scope == "project" else None
+            target, host, args.scope, root
         )
 
     action = "would install" if args.dry_run else "installed"
@@ -326,7 +346,7 @@ def run(args: argparse.Namespace) -> int:
             # Repeat path validation immediately before mutation to narrow the
             # window in which a parent directory could be replaced.
             validate_target(
-                target, host, args.scope, root if args.scope == "project" else None
+                target, host, args.scope, root
             )
             replace_from_source(target, host, args.scope)
         print(f"{action} {host} skill at {target}")

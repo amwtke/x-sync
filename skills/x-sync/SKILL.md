@@ -1,6 +1,6 @@
 ---
 name: x-sync
-description: Assess and improve how well a person, an AI agent, and the current repository agree on task-relevant business and technical knowledge. A bare $x-sync or /x-sync invocation immediately starts or resumes a local interactive HTML quiz, defaulting to Socratic dialogue, mixed business and technical coverage, and 5 questions. Use for repository onboarding, knowledge checks, architecture or incident review, pre-agent task readiness, and spaced review grounded in specs, stories, commits, bug fixes, code, tests, infrastructure, and official technology sources. Do not use as an employee ranking tool or claim that one score measures understanding of an entire repository.
+description: Assess and improve how well a person, an AI agent, and the current repository agree on task-relevant business and technical knowledge. Resume any unfinished session first. Otherwise, before the first new session, scan the safe whole project before selecting a bank; a bare $x-sync or /x-sync then opens a local interactive HTML quiz with Socratic dialogue, mixed business and technical coverage, and 5 questions. Use for repository onboarding, knowledge checks, architecture or incident review, pre-agent task readiness, and spaced review grounded in specs, stories, commits, bug fixes, code, tests, infrastructure, and official technology sources. Do not use as an employee ranking tool or claim that one score measures understanding of an entire repository.
 ---
 
 # X-Sync
@@ -22,16 +22,24 @@ Never assume a Codex- or Claude-specific environment variable exists. Resolve re
 1. Run `doctor --repo <repo> --json`. Use a learner explicitly named by the user; otherwise use `default_learner` from the result. Explain the private local `.x-sync/` record only when creating that learner's first profile.
 2. Run `status --repo <repo> --learner <learner> --json`.
 3. Resume an unfinished active session instead of replacing it. Treat `question_open`, `answer_saved`, `agent_review_pending`, and `reviewed` as unfinished and preserve its stored configuration. If its stored channel is `web`, reopen its page with `serve --session <id> --port 0 --open`; if it is `terminal`, present or review it in the Agent terminal and do not call `serve`. Start a new session only when none exists, the active session is `completed`, or the user explicitly requests a new round.
-4. For a new session, merge explicit user choices over this bare-invocation preset:
+4. Before preparing any new session, inspect `status.repository_scan`. If `initial_scan_complete` is not `true`, run the mandatory first-use scan before checking an installed bank or generating a new one:
+
+   ```bash
+   python3 <skill-dir>/scripts/xsync.py scan --repo <repo> --json
+   ```
+
+   Read the returned `manifest_path` and account for the complete safe engineering-tree inventory: documentation, Specs/Stories/ADRs, source, interfaces, models, tests, configuration, migrations, build manifests, infrastructure and operational files, plus the bounded commit summary. Every eligible Git-tracked or non-ignored untracked regular file is enumerated, validated, classified and content-hashed. Do not open `.git/`, `.x-sync/`, `.env*`, known secret/credential/token stores or key files, vendored/generated dependency trees, binaries, oversized files, symlinks, submodules, or paths outside the repository. Git-ignored files are outside the scan universe. Require a normal non-sparse Git worktree with at least one commit. A fresh installed bank never bypasses this first scan.
+5. Treat the full scan as discovery, not as semantic evidence or proof that the Agent understood every line. Ground questions with focused file/commit evidence and its freshness checks. Later invocations do not repeat the full scan merely because they are bare; `stale` or `captured_dirty` is a signal to refresh when the repository/task requires it, while `initial_scan_complete` remains the first-use gate. Never delay or alter unfinished-session recovery to perform a scan.
+6. For a new session, merge explicit user choices over this bare-invocation preset:
    - `style=socratic`;
    - `channel=web`;
    - `focus=mixed`;
    - `count=5`;
    - no maximum depth unless the user supplies one;
    - a bounded repository-onboarding task chosen from the strongest available evidence.
-5. Do not ask a setup question for values supplied by this preset. If the user explicitly requests a different style, channel, focus, count, depth, task, or learner, override only that value.
-6. Reuse an installed bank only when it is fresh and can supply the requested session. For the default preset, require exactly five eligible Socratic questions and include both `business` and `technical` domains. Otherwise inspect the repository, generate, validate, and install a suitable bank before starting.
-7. After starting a web session, immediately run `serve --port 0 --open`, keep the yielded process running, and return the tokenized loopback URL. Do not stop after merely creating session state.
+7. Do not ask a setup question for values supplied by this preset. If the user explicitly requests a different style, channel, focus, count, depth, task, or learner, override only that value.
+8. Reuse an installed bank only after the first-scan gate has passed and when it is fresh and can supply the requested session. For the default preset, require exactly five eligible Socratic questions and include both `business` and `technical` domains. Otherwise inspect the repository, generate, validate, and install a suitable bank before starting.
+9. After starting a web session, immediately run `serve --port 0 --open`, keep the yielded process running, and return the tokenized loopback URL. Do not stop after merely creating session state.
 
 Never silently abandon an unfinished session. If explicit new settings conflict with one, resume it unless the user clearly asks for a new round.
 

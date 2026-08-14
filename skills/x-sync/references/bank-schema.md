@@ -5,6 +5,8 @@ Use UTF-8 JSON for banks, configuration, state, mastery, reports, and individual
 Store shared repository records and private learner records separately:
 
 ```text
+.x-sync/repositories/<repo-id>/
+  scan.json
 .x-sync/users/<learner>/projects/<repo-id>/
   banks/
     <bank-id>.json
@@ -21,6 +23,16 @@ Store shared repository records and private learner records separately:
 ```
 
 Allow a runtime to add indexes, locks, and temporary files, but treat these JSON records as the portable interchange format for Codex and Claude Code. In a Git repository, add `/.x-sync/` to the repository-local `.git/info/exclude`; do not modify the team's `.gitignore`. Do not place answer keys in a web payload before grading.
+
+## Store the first-use repository scan
+
+Before installing or selecting the first bank for a repository, create the shared `scan.json`. Require `schema_version`, `record_type: repository_scan`, `policy_version`, `scan_id`, `snapshot_id`, `repo_id`, `baseline_commit`, `state_token`, `working_tree`, `scope`, `complete`, `created_at`, `fingerprint`, `summary`, `files`, `commits`, and `integrity_hash`. A qualifying initial gate requires `scope.type: full` and `complete: true`; a path-scoped inventory is never a substitute.
+
+Define the full scan universe as Git tracked files plus non-ignored untracked files in a normal, non-sparse worktree. Sort unique repository-relative paths. Before opening a candidate, exclude sensitive paths and generated/dependency directory segments. Open every remaining candidate without following any path-component symlink, read at most the configured bound, require a regular UTF-8 non-binary file, and record its path, SHA-256, byte/line counts, executable bit, discovery kind, LFS-pointer marker, and `tracked|untracked` source. Record exclusion counts without storing secret path names or contents. Do not recurse into Git submodules, and do not treat an LFS pointer as the unavailable object content.
+
+Derive `scan_id` and `fingerprint` from the scan policy, repository identity, baseline commit, Git/index state token, full scope, and sorted file records; exclude `created_at` and local output paths. Repeating an unchanged scan must reuse the same materialized bytes. Revalidate the repository state and opened candidates before atomically publishing `scan.json`; an incomplete, concurrent, oversized, non-Git, or sparse scan must fail closed and must not satisfy the initial gate.
+
+The repository scan is a discovery inventory, not a scored evidence item and not proof that a host Agent understood every file. Questions must still cite focused file or commit evidence and revalidate that evidence before presentation and grading. Expose `initial_scan_complete` separately from freshness states such as `fresh`, `captured_dirty`, and `stale`; unfinished-session recovery takes precedence over this first-use gate.
 
 Store each bank as one object with `schema_version`, `bank_id`, `repo_id`, `baseline_commit`, `working_tree`, `created_at`, `evidence`, and `questions`. Set `working_tree.dirty` to a boolean. When it is true, require `working_tree.diff_hash` as `sha256:<64 hex digits>`. Require `evidence` and `questions` to be arrays. Treat evidence IDs as unique. Store at most one current version of a question ID in a bank; preserve older versions in immutable prior banks and session snapshots.
 
@@ -69,7 +81,7 @@ Use these fields inside `source`:
 Use these fields inside `repository`:
 
 - Require `root_id`, a stable repository identifier.
-- Require `baseline_commit`, a full 40-character lowercase Git SHA.
+- Require `baseline_commit`, a full lowercase Git object ID: 40 hex characters for SHA-1 repositories or 64 for SHA-256 repositories.
 - Require `branch` only as descriptive context; never use a branch name instead of `baseline_commit`.
 
 For `kind: inference` or `claim_type: inference`, require `derived_from`, an array containing at least two evidence IDs, and set `authority` to `derived`. Do not use an inference by itself to establish a uniquely correct answer. For `kind: conflict` or `claim_type: conflict`, require `derived_from` with at least two conflicting evidence IDs and set `authority` to `conflicted`.

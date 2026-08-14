@@ -196,6 +196,17 @@ class InstallerTests(unittest.TestCase):
         self.assertFalse((outside / "skills").exists())
         self.assertIn("symlink parent", stderr)
 
+    def test_user_parent_symlink_cannot_escape_home(self):
+        outside = self.root / "outside-user"
+        outside.mkdir()
+        (self.home / ".agents").symlink_to(outside, target_is_directory=True)
+
+        status, _, stderr = self.invoke(["--host", "codex", "--scope", "user"])
+
+        self.assertEqual(status, 1)
+        self.assertFalse((outside / "skills").exists())
+        self.assertIn("symlink parent", stderr)
+
     def test_symlink_project_root_is_rejected(self):
         real_project = self.root / "real-project"
         project_link = self.root / "project-link"

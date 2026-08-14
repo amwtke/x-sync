@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import datetime as dt
+import errno
 import getpass
 import hashlib
 import http.server
@@ -35,17 +36,39 @@ import webbrowser
 SCHEMA_VERSION = 1
 LEARNER_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}\Z")
 ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:@-]{0,127}\Z")
-TEXT_EXTENSIONS = {
-    ".md", ".txt", ".rst", ".adoc", ".py", ".js", ".ts", ".tsx",
-    ".jsx", ".java", ".kt", ".go", ".rs", ".c", ".h", ".cpp",
-    ".cs", ".rb", ".php", ".scala", ".sql", ".sh", ".yaml", ".yml",
-    ".json", ".toml", ".ini", ".xml", ".html", ".css", ".dockerfile",
+GIT_OID_RE = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
+SECRET_NAMES = {
+    ".dockercfg", ".env", ".envrc", ".netrc", ".npmrc", ".pypirc",
+    "auth.json", "credentials", "credentials.json", "id_ed25519", "id_rsa",
+    "secret.json", "secrets.json", "terraform.tfstate",
 }
-SECRET_NAMES = {".env", "id_rsa", "id_ed25519", "credentials", "credentials.json"}
-SENSITIVE_PARTS = {".git", ".x-sync", ".ssh", ".aws", ".gnupg"}
-SENSITIVE_SUFFIXES = {".pem", ".key", ".p12", ".pfx", ".kdbx"}
+SECRET_CONFIG_STEMS = {"credential", "credentials", "secret", "secrets", "token", "tokens"}
+SECRET_CONFIG_SUFFIXES = {
+    ".conf", ".ini", ".json", ".properties", ".text", ".tfvars", ".toml",
+    ".txt", ".xml", ".yaml", ".yml",
+}
+SENSITIVE_PARTS = {
+    ".aws", ".azure", ".docker", ".gcloud", ".git", ".gnupg", ".kube",
+    ".ssh", ".x-sync", "credentials", "secrets",
+}
+SENSITIVE_SUFFIXES = {
+    ".jks", ".kdbx", ".key", ".keystore", ".mobileprovision", ".p12",
+    ".pem", ".pfx", ".tfstate",
+}
+GENERATED_DIRECTORY_PARTS = {
+    ".cache", ".gradle", ".m2", ".mypy_cache", ".next", ".nuxt",
+    ".pnpm-store", ".pytest_cache", ".ruff_cache", ".terraform", ".tox",
+    ".venv", "__pycache__", "bower_components", "build", "coverage",
+    "deriveddata", "dist", "node_modules", "out", "pods", "target",
+    "vendor", "venv",
+}
 MAX_FOCUSED_EVIDENCE_BYTES = 1_000_000
 MAX_COMMIT_EVIDENCE_BYTES = 5_000_000
+MAX_SCAN_INDEX_BYTES = 64 * 1024 * 1024
+MAX_SCAN_FILES = 200_000
+MAX_SCAN_TOTAL_BYTES = 256 * 1024 * 1024
+MAX_SCAN_MANIFEST_BYTES = 64 * 1024 * 1024
+SCAN_POLICY_VERSION = "safe-engineering-tree-v1"
 DEFAULT_STYLE = "socratic"
 DEFAULT_CHANNEL = "web"
 DEFAULT_FOCUS = "mixed"
@@ -190,11 +213,17 @@ def repo_id(repo: Path) -> str:
 
 
 def working_tree_state(repo: Path) -> dict:
-    status = git(repo, "status", "--porcelain=v1", "--untracked-files=all", check=False)
+    if git(repo, "rev-parse", "--is-inside-work-tree", check=False) != "true":
+        return {"dirty": False}
+    status = git_scan_bytes(
+        repo, "status", "--porcelain=v1", "-z", "--untracked-files=all"
+    )
     if not status:
         return {"dirty": False}
-    diff = git(repo, "diff", "--binary", "HEAD", check=False)
-    payload = f"{status}\n--DIFF--\n{diff}".encode("utf-8", errors="surrogateescape")
+    head = git(repo, "rev-parse", "HEAD", check=False)
+    diff = (git_scan_bytes(repo, "diff", "--binary", "--no-ext-diff", "HEAD")
+            if head else b"")
+    payload = b"x-sync-working-tree-v1\0" + status + b"\0--DIFF--\0" + diff
     return {"dirty": True, "diff_hash": f"sha256:{hashlib.sha256(payload).hexdigest()}"}
 
 
@@ -202,8 +231,13 @@ def is_sensitive_path(path: Path) -> bool:
     """Return true for paths x-sync must never inspect as evidence."""
     lowered = {part.lower() for part in path.parts}
     name = path.name.lower()
-    return (bool(lowered & SENSITIVE_PARTS) or name in SECRET_NAMES
-            or name.startswith(".env.") or path.suffix.lower() in SENSITIVE_SUFFIXES)
+    stem_tokens = set(re.split(r"[._-]+", path.stem.lower()))
+    secret_config = (path.suffix.lower() in SECRET_CONFIG_SUFFIXES
+                     and bool(stem_tokens & SECRET_CONFIG_STEMS))
+    return (bool(lowered & SENSITIVE_PARTS) or bool(lowered & SECRET_NAMES)
+            or name.startswith(".env.") or secret_config
+            or ".tfstate" in name or ".tfvars" in name
+            or path.suffix.lower() in SENSITIVE_SUFFIXES)
 
 
 def process_alive(pid: object) -> bool:
@@ -305,6 +339,490 @@ def focused_file_bytes(path: Path, start: int | None = None,
     if start > len(lines) or end > len(lines):
         raise XSyncError(f"evidence 行号超出文件范围（共 {len(lines)} 行）")
     return "".join(lines[start - 1:end]).encode("utf-8")
+
+
+def git_scan_bytes(repo: Path, *args: str) -> bytes:
+    """Return bounded raw Git output for repository discovery."""
+    environment = os.environ.copy()
+    environment.update({"LC_ALL": "C", "LANG": "C", "GIT_OPTIONAL_LOCKS": "0"})
+    with tempfile.TemporaryFile() as error_stream:
+        try:
+            process = subprocess.Popen(
+                ["git", "-C", str(repo), *args], stdout=subprocess.PIPE,
+                stderr=error_stream, env=environment,
+            )
+        except FileNotFoundError as exc:
+            raise XSyncError("首次全工程扫描需要 Git") from exc
+        assert process.stdout is not None
+        raw = process.stdout.read(MAX_SCAN_INDEX_BYTES + 1)
+        if len(raw) > MAX_SCAN_INDEX_BYTES:
+            process.kill()
+            process.wait()
+            process.stdout.close()
+            raise XSyncError("Git 扫描输出过大；请先排除生成目录或缩小仓库")
+        returncode = process.wait()
+        process.stdout.close()
+        error_stream.seek(0)
+        stderr = error_stream.read(64 * 1024)
+    if returncode:
+        message = stderr.decode("utf-8", errors="replace").strip()
+        raise XSyncError(message or "Git 工程文件枚举失败")
+    return raw
+
+
+def git_nul_paths(repo: Path, *args: str) -> list[str]:
+    """Return raw NUL-delimited Git paths without quote/display ambiguity."""
+    raw = git_scan_bytes(repo, *args)
+    fields = [field for field in raw.split(b"\0") if field]
+    if len(fields) > MAX_SCAN_FILES:
+        raise XSyncError(
+            f"工程候选文件超过 {MAX_SCAN_FILES} 个；请先排除依赖或生成目录"
+        )
+    paths = []
+    for field in fields:
+        try:
+            paths.append(field.decode("utf-8"))
+        except UnicodeDecodeError as exc:
+            raise XSyncError("工程包含非 UTF-8 文件名，无法生成可移植扫描清单") from exc
+    return paths
+
+
+def repository_state_token(repo: Path) -> tuple[str, bytes, str]:
+    head = git(repo, "rev-parse", "HEAD", check=False)
+    raw_status = git_scan_bytes(
+        repo, "status", "--porcelain=v1", "-z", "--untracked-files=all"
+    )
+    raw_index = git_scan_bytes(repo, "ls-files", "--stage", "-z")
+    digest = hashlib.sha256(
+        b"x-sync-repository-state-v1\0" + raw_status + b"\0--INDEX--\0" + raw_index
+    ).hexdigest()
+    return head, raw_status, f"sha256:{digest}"
+
+
+def git_index_gitlinks(repo: Path) -> set[str]:
+    gitlinks = set()
+    for entry in git_scan_bytes(repo, "ls-files", "--stage", "-z").split(b"\0"):
+        if not entry:
+            continue
+        metadata, separator, raw_path = entry.partition(b"\t")
+        if separator and metadata.split(b" ", 1)[0] == b"160000":
+            try:
+                gitlinks.add(raw_path.decode("utf-8"))
+            except UnicodeDecodeError as exc:
+                raise XSyncError("工程包含非 UTF-8 submodule 路径") from exc
+    return gitlinks
+
+
+def is_generated_path(path: Path) -> bool:
+    """Return true when a file lives below a dependency/build/cache directory."""
+    return any(part.lower() in GENERATED_DIRECTORY_PARTS for part in path.parts[:-1])
+
+
+def scan_file_kind(path: Path) -> str:
+    """Classify an inventory entry without inferring its business meaning."""
+    parts = {part.lower() for part in path.parts}
+    name = path.name.lower()
+    suffix = path.suffix.lower()
+    if parts & {"test", "tests", "spec", "specs", "__tests__"} or name.startswith("test_"):
+        return "test"
+    if parts & {"docs", "doc", "adr", "adrs", "stories"} or suffix in {
+        ".md", ".rst", ".adoc", ".txt",
+    }:
+        return "documentation"
+    if parts & {"migrations", "migration"}:
+        return "migration"
+    if parts & {"docker", "k8s", "kubernetes", "helm", "terraform", "deploy"} or name in {
+        "dockerfile", "docker-compose.yml", "docker-compose.yaml",
+    }:
+        return "infrastructure"
+    if name in {
+        "build.gradle", "cargo.toml", "go.mod", "go.sum", "makefile",
+        "package-lock.json", "package.json", "pom.xml", "pyproject.toml",
+        "requirements.txt",
+    }:
+        return "build"
+    if suffix in {".conf", ".ini", ".json", ".properties", ".toml", ".xml", ".yaml", ".yml"}:
+        return "configuration"
+    return "source"
+
+
+def scan_relative_file(repo: Path, relative: Path) -> tuple[dict | None, str | None]:
+    """Read one repository file through no-follow directory descriptors."""
+    if not relative.parts or relative.is_absolute() or ".." in relative.parts:
+        raise XSyncError(f"非法工程相对路径: {relative}")
+    directory_fds: list[int] = []
+    file_fd: int | None = None
+    try:
+        root_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+        root_fd = os.open(repo, root_flags)
+        directory_fds.append(root_fd)
+        current_fd = root_fd
+        for part in relative.parts[:-1]:
+            flags = (os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+                     | getattr(os, "O_NOFOLLOW", 0))
+            if os.open in os.supports_dir_fd:
+                next_fd = os.open(part, flags, dir_fd=current_fd)
+            else:  # pragma: no cover - fallback for platforms without dir_fd
+                lexical = repo.joinpath(*relative.parts[:len(directory_fds)])
+                if lexical.is_symlink():
+                    return None, "symlink"
+                next_fd = os.open(lexical, flags)
+            metadata = os.fstat(next_fd)
+            if not statlib.S_ISDIR(metadata.st_mode):
+                os.close(next_fd)
+                return None, "symlink"
+            directory_fds.append(next_fd)
+            current_fd = next_fd
+        file_flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        if os.open in os.supports_dir_fd:
+            file_fd = os.open(relative.parts[-1], file_flags, dir_fd=current_fd)
+        else:  # pragma: no cover - fallback for platforms without dir_fd
+            lexical = repo.joinpath(*relative.parts)
+            resolved = lexical.resolve(strict=False)
+            try:
+                resolved.relative_to(repo.resolve())
+            except ValueError:
+                return None, "symlink"
+            if lexical.is_symlink():
+                return None, "symlink"
+            file_fd = os.open(lexical, file_flags)
+        metadata = os.fstat(file_fd)
+        if not statlib.S_ISREG(metadata.st_mode):
+            return None, "special"
+        if metadata.st_size > MAX_FOCUSED_EVIDENCE_BYTES:
+            return None, "oversized"
+        with os.fdopen(file_fd, "rb") as stream:
+            file_fd = None
+            raw = stream.read(MAX_FOCUSED_EVIDENCE_BYTES + 1)
+            after = os.fstat(stream.fileno())
+        before_token = (metadata.st_dev, metadata.st_ino, metadata.st_size,
+                        metadata.st_mtime_ns, metadata.st_ctime_ns, metadata.st_mode)
+        after_token = (after.st_dev, after.st_ino, after.st_size,
+                       after.st_mtime_ns, after.st_ctime_ns, after.st_mode)
+        if before_token != after_token:
+            return None, "changed_during_scan"
+        if len(raw) > MAX_FOCUSED_EVIDENCE_BYTES:
+            return None, "oversized"
+        if b"\0" in raw:
+            return None, "binary_or_non_utf8"
+        try:
+            raw.decode("utf-8")
+        except UnicodeDecodeError:
+            return None, "binary_or_non_utf8"
+        return {
+            "path": relative.as_posix(),
+            "sha256": hashlib.sha256(raw).hexdigest(),
+            "bytes": len(raw),
+            "lines": raw.count(b"\n") + int(bool(raw) and not raw.endswith(b"\n")),
+            "executable": bool(metadata.st_mode & 0o111),
+            "kind": scan_file_kind(relative),
+            "lfs_pointer": raw.startswith(b"version https://git-lfs.github.com/spec/v1\n"),
+        }, None
+    except OSError as exc:
+        if exc.errno in {errno.ELOOP, errno.ENOTDIR}:
+            return None, "symlink"
+        if exc.errno == errno.ENOENT:
+            return None, "changed_during_scan"
+        raise XSyncError(f"无法完整扫描工程文件 {relative}: {exc}") from exc
+    finally:
+        if file_fd is not None:
+            with contextlib.suppress(OSError):
+                os.close(file_fd)
+        for descriptor in reversed(directory_fds):
+            with contextlib.suppress(OSError):
+                os.close(descriptor)
+
+
+def scan_relative_metadata_token(repo: Path, relative: Path) -> tuple[object, ...]:
+    """Read no-follow metadata used to detect same-status content races."""
+    directory_fds: list[int] = []
+    try:
+        root_fd = os.open(repo, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        directory_fds.append(root_fd)
+        current_fd = root_fd
+        for index, part in enumerate(relative.parts[:-1], start=1):
+            flags = (os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+                     | getattr(os, "O_NOFOLLOW", 0))
+            if os.open in os.supports_dir_fd:
+                next_fd = os.open(part, flags, dir_fd=current_fd)
+            else:  # pragma: no cover - fallback for platforms without dir_fd
+                lexical = repo.joinpath(*relative.parts[:index])
+                if lexical.is_symlink():
+                    return ("unsafe",)
+                next_fd = os.open(lexical, flags)
+            directory_fds.append(next_fd)
+            current_fd = next_fd
+        if os.stat in os.supports_dir_fd:
+            metadata = os.stat(relative.parts[-1], dir_fd=current_fd, follow_symlinks=False)
+        else:  # pragma: no cover - fallback for platforms without dir_fd
+            metadata = os.lstat(repo.joinpath(*relative.parts))
+        return (metadata.st_dev, metadata.st_ino, metadata.st_size,
+                metadata.st_mtime_ns, metadata.st_ctime_ns, metadata.st_mode)
+    except OSError as exc:
+        if exc.errno == errno.ENOENT:
+            return ("missing",)
+        if exc.errno in {errno.ELOOP, errno.ENOTDIR}:
+            return ("unsafe",)
+        raise XSyncError(f"无法核对工程文件元数据 {relative}: {exc}") from exc
+    finally:
+        for descriptor in reversed(directory_fds):
+            with contextlib.suppress(OSError):
+                os.close(descriptor)
+
+
+def normalize_scan_paths(paths: list[str] | None) -> list[str]:
+    normalized = []
+    for raw in paths or []:
+        value = raw.rstrip("/") or "."
+        path = Path(value)
+        if (path.is_absolute() or ".." in path.parts or is_sensitive_path(path)
+                or is_generated_path(path)):
+            raise XSyncError("--paths 必须是安全、无 .. 的仓库相对路径")
+        if value != ".":
+            normalized.append(path.as_posix())
+    return sorted(set(normalized))
+
+
+def path_in_scan_scope(path: str, scopes: list[str]) -> bool:
+    return not scopes or any(path == scope or path.startswith(scope + "/") for scope in scopes)
+
+
+def verify_scan_candidates(repo: Path, observations: dict[str, dict | str]) -> None:
+    """Recheck every opened candidate before declaring the scan complete."""
+    keys = {"path", "sha256", "bytes", "lines", "executable", "kind", "lfs_pointer"}
+    for path, expected in observations.items():
+        actual, reason = scan_relative_file(repo, Path(path))
+        if isinstance(expected, str):
+            consistent = reason == expected
+        else:
+            consistent = reason is None and actual == {key: expected[key] for key in keys}
+        if not consistent:
+            raise XSyncError("工程在扫描期间发生变化；请重试 x-sync")
+
+
+def verify_scan_metadata(repo: Path, observations: dict[str, tuple[object, ...]]) -> None:
+    for path, expected in observations.items():
+        if scan_relative_metadata_token(repo, Path(path)) != expected:
+            raise XSyncError("工程在扫描期间发生变化；请重试 x-sync")
+
+
+def repository_scan_manifest(repo: Path, paths: list[str] | None = None) -> dict:
+    """Build a complete manifest of the safe, project-owned engineering tree."""
+    repo = repo.resolve()
+    if git(repo, "rev-parse", "--is-inside-work-tree", check=False) != "true":
+        raise XSyncError("首次全工程扫描需要 Git 仓库；当前目录不是 Git worktree")
+    if git(repo, "config", "--bool", "core.sparseCheckout", check=False) == "true":
+        raise XSyncError("完整工程扫描暂不支持 sparse checkout；请使用完整 worktree")
+    baseline_commit, start_status, state_token = repository_state_token(repo)
+    if not GIT_OID_RE.fullmatch(baseline_commit):
+        raise XSyncError("首次全工程扫描需要至少一个 Git commit")
+    scopes = normalize_scan_paths(paths)
+    tracked = set(git_nul_paths(repo, "ls-files", "-z", "--cached"))
+    untracked = set(git_nul_paths(
+        repo, "ls-files", "-z", "--others", "--exclude-standard"
+    ))
+    deleted = set(git_nul_paths(repo, "ls-files", "-z", "--deleted"))
+    gitlinks = git_index_gitlinks(repo)
+    candidates = sorted(tracked | untracked)
+    if len(candidates) > MAX_SCAN_FILES:
+        raise XSyncError(
+            f"工程候选文件超过 {MAX_SCAN_FILES} 个；请先排除依赖或生成目录"
+        )
+    exclusions = {
+        "sensitive": 0, "generated_or_vendor": 0, "symlink": 0,
+        "oversized": 0, "binary_or_non_utf8": 0, "special": 0,
+        "deleted": 0, "gitlink": 0,
+    }
+    records = []
+    observations: dict[str, dict | str] = {}
+    metadata_observations: dict[str, tuple[object, ...]] = {}
+    scoped_candidates = 0
+    included_bytes = 0
+    for raw_path in candidates:
+        if not path_in_scan_scope(raw_path, scopes):
+            continue
+        scoped_candidates += 1
+        relative = Path(raw_path)
+        if relative.is_absolute() or ".." in relative.parts:
+            raise XSyncError(f"Git 返回非法工程路径: {raw_path!r}")
+        if is_sensitive_path(relative):
+            exclusions["sensitive"] += 1
+            continue
+        if is_generated_path(relative):
+            exclusions["generated_or_vendor"] += 1
+            continue
+        if raw_path in deleted:
+            exclusions["deleted"] += 1
+            continue
+        if raw_path in gitlinks:
+            exclusions["gitlink"] += 1
+            continue
+        metadata_observations[raw_path] = scan_relative_metadata_token(repo, relative)
+        record, reason = scan_relative_file(repo, relative)
+        if reason == "changed_during_scan":
+            raise XSyncError("工程在扫描期间发生变化；请重试 x-sync")
+        if reason:
+            exclusions[reason] += 1
+            observations[raw_path] = reason
+            continue
+        assert record is not None
+        observations[raw_path] = dict(record)
+        record["source"] = "tracked" if raw_path in tracked else "untracked"
+        included_bytes += record["bytes"]
+        if included_bytes > MAX_SCAN_TOTAL_BYTES:
+            raise XSyncError(
+                f"安全文本总量超过 {MAX_SCAN_TOTAL_BYTES} bytes；请拆分仓库或排除生成内容"
+            )
+        records.append(record)
+    records.sort(key=lambda item: item["path"])
+    verify_scan_candidates(repo, observations)
+    verify_scan_metadata(repo, metadata_observations)
+    end_head, end_status, end_state_token = repository_state_token(repo)
+    if (end_head, end_status) != (baseline_commit, start_status):
+        raise XSyncError("工程在扫描期间发生变化；请重试 x-sync")
+    if end_state_token != state_token:
+        raise XSyncError("工程状态指纹在扫描期间发生变化；请重试 x-sync")
+    kinds: dict[str, int] = {}
+    for record in records:
+        kinds[record["kind"]] = kinds.get(record["kind"], 0) + 1
+    try:
+        log_text = git_scan_bytes(
+            repo, "log", "-n", "100", "--format=%H%x09%s"
+        ).decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise XSyncError("Git commit summary 必须是 UTF-8") from exc
+    log_lines = log_text.splitlines()
+    recent_commits = [{
+        "sha": line.split("\t", 1)[0],
+        "subject": line.split("\t", 1)[1] if "\t" in line else "",
+    } for line in log_lines]
+    scope = {"type": "full" if not scopes else "paths", "paths": scopes}
+    fingerprint_payload = {
+        "policy_version": SCAN_POLICY_VERSION,
+        "repo_id": repo_id(repo),
+        "baseline_commit": baseline_commit,
+        "state_token": state_token,
+        "scope": scope,
+        "files": records,
+    }
+    fingerprint = hashlib.sha256(canonical_bytes(fingerprint_payload)).hexdigest()
+    scan_id = f"scan.{fingerprint}"
+    manifest = {
+        "schema_version": SCHEMA_VERSION,
+        "record_type": "repository_scan",
+        "policy_version": SCAN_POLICY_VERSION,
+        "scan_id": scan_id,
+        "snapshot_id": scan_id,
+        "repo_id": repo_id(repo),
+        "baseline_commit": baseline_commit,
+        "state_token": state_token,
+        "working_tree": {"dirty": bool(start_status), "status_hash": state_token},
+        "scope": scope,
+        "complete": True,
+        "created_at": utc_now(),
+        "fingerprint": f"sha256:{fingerprint}",
+        "summary": {
+            "candidate_files": scoped_candidates,
+            "included_files": len(records),
+            "included_bytes": included_bytes,
+            "top_level_entries": sorted({item["path"].split("/", 1)[0] for item in records}),
+            "kinds": kinds,
+            "excluded": exclusions,
+            "gitignored": "out_of_scope",
+            "recent_commits": len(recent_commits),
+        },
+        "files": records,
+        "commits": recent_commits,
+    }
+    if len(canonical_bytes(manifest)) > MAX_SCAN_MANIFEST_BYTES:
+        raise XSyncError("repository scan manifest 过大；请拆分仓库")
+    manifest["integrity_hash"] = "sha256:" + hashlib.sha256(
+        canonical_bytes(manifest)
+    ).hexdigest()
+    return manifest
+
+
+def validate_repository_scan(manifest: object, require_current_policy: bool = True) -> dict:
+    if not isinstance(manifest, dict):
+        raise XSyncError("repository scan 格式错误")
+    required = {
+        "schema_version", "record_type", "policy_version", "scan_id", "repo_id",
+        "snapshot_id", "baseline_commit", "state_token", "working_tree", "scope",
+        "complete", "created_at", "fingerprint", "summary", "files", "commits",
+        "integrity_hash",
+    }
+    if not required.issubset(manifest):
+        raise XSyncError("repository scan 缺少必填字段")
+    if (manifest.get("schema_version") != SCHEMA_VERSION
+            or manifest.get("record_type") != "repository_scan"
+            or not isinstance(manifest.get("policy_version"), str)
+            or (require_current_policy and manifest.get("policy_version") != SCAN_POLICY_VERSION)
+            or manifest.get("complete") is not True):
+        raise XSyncError("repository scan schema/policy 非法")
+    files = manifest.get("files")
+    scope = manifest.get("scope")
+    if (not isinstance(files, list) or not isinstance(scope, dict)
+            or not re.fullmatch(r"[0-9a-f]{16}", str(manifest.get("repo_id", "")))
+            or not GIT_OID_RE.fullmatch(str(manifest.get("baseline_commit", "")))
+            or not re.fullmatch(r"sha256:[0-9a-f]{64}", str(manifest.get("state_token", "")))):
+        raise XSyncError("repository scan files/scope 非法")
+    if scope.get("type") not in {"full", "paths"} or not isinstance(scope.get("paths"), list):
+        raise XSyncError("repository scan scope 非法")
+    seen_paths = []
+    allowed_kinds = {"build", "configuration", "documentation", "infrastructure",
+                     "migration", "source", "test"}
+    for index, item in enumerate(files):
+        if not isinstance(item, dict):
+            raise XSyncError(f"repository scan files[{index}] 非法")
+        path_value = item.get("path")
+        relative = Path(path_value) if isinstance(path_value, str) else Path("..")
+        if (not isinstance(path_value, str) or not path_value
+                or relative.is_absolute() or ".." in relative.parts
+                or is_sensitive_path(relative) or is_generated_path(relative)
+                or not re.fullmatch(r"[0-9a-f]{64}", str(item.get("sha256", "")))
+                or not isinstance(item.get("bytes"), int) or isinstance(item.get("bytes"), bool)
+                or item["bytes"] < 0
+                or not isinstance(item.get("lines"), int) or isinstance(item.get("lines"), bool)
+                or item["lines"] < 0
+                or not isinstance(item.get("executable"), bool)
+                or not isinstance(item.get("lfs_pointer"), bool)
+                or item.get("kind") not in allowed_kinds
+                or item.get("source") not in {"tracked", "untracked"}):
+            raise XSyncError(f"repository scan files[{index}] 字段非法")
+        seen_paths.append(path_value)
+    if seen_paths != sorted(set(seen_paths)):
+        raise XSyncError("repository scan files 必须按唯一 path 排序")
+    summary = manifest.get("summary")
+    kinds: dict[str, int] = {}
+    for item in files:
+        kinds[item["kind"]] = kinds.get(item["kind"], 0) + 1
+    if (not isinstance(summary, dict)
+            or summary.get("included_files") != len(files)
+            or summary.get("included_bytes") != sum(item["bytes"] for item in files)
+            or summary.get("kinds") != kinds
+            or summary.get("top_level_entries") != sorted({
+                item["path"].split("/", 1)[0] for item in files
+            })):
+        raise XSyncError("repository scan summary 与 files 不一致")
+    fingerprint_payload = {
+        "policy_version": manifest["policy_version"],
+        "repo_id": manifest["repo_id"],
+        "baseline_commit": manifest["baseline_commit"],
+        "state_token": manifest["state_token"],
+        "scope": scope,
+        "files": files,
+    }
+    fingerprint = hashlib.sha256(canonical_bytes(fingerprint_payload)).hexdigest()
+    if (manifest.get("scan_id") != f"scan.{fingerprint}"
+            or manifest.get("snapshot_id") != manifest.get("scan_id")
+            or manifest.get("fingerprint") != f"sha256:{fingerprint}"):
+        raise XSyncError("repository scan fingerprint 不一致")
+    without_integrity = dict(manifest)
+    claimed_integrity = without_integrity.pop("integrity_hash", None)
+    actual_integrity = "sha256:" + hashlib.sha256(canonical_bytes(without_integrity)).hexdigest()
+    if claimed_integrity != actual_integrity:
+        raise XSyncError("repository scan integrity 不一致")
+    return manifest
 
 
 class Store:
@@ -429,12 +947,18 @@ def init_profile(store: Store) -> dict:
 
 def ensure_private_git_exclude(repo: Path) -> None:
     """Ignore private learning data locally without changing the team's .gitignore."""
+    repo = repo.resolve()
     exclude_value = git(repo, "rev-parse", "--git-path", "info/exclude", check=False)
     if not exclude_value:
         return
     exclude = Path(exclude_value)
     if not exclude.is_absolute():
-        exclude = (repo / exclude).resolve()
+        exclude = Path(os.path.abspath(repo / exclude))
+    cursor = exclude
+    while cursor != cursor.parent:
+        if cursor.is_symlink():
+            raise XSyncError(f"拒绝通过符号链接修改 Git exclude: {cursor}")
+        cursor = cursor.parent
     if exclude.is_symlink():
         raise XSyncError(f"拒绝通过符号链接修改 Git exclude: {exclude}")
     rule = "/.x-sync/"
@@ -446,6 +970,119 @@ def ensure_private_git_exclude(repo: Path) -> None:
         updated += "\n"
     updated += f"\n# Private x-sync learner data\n{rule}\n"
     atomic_write(exclude, updated.encode("utf-8"))
+
+
+def repository_scan_directory(store: Store) -> Path:
+    return safe_child(store.root, "repositories", repo_id(store.repo))
+
+
+def repository_scan_response(manifest: dict, path: Path, reused: bool) -> dict:
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "scan_id": manifest["scan_id"],
+        "repo_id": manifest["repo_id"],
+        "baseline_commit": manifest["baseline_commit"],
+        "policy_version": manifest["policy_version"],
+        "complete": manifest["complete"],
+        "created_at": manifest["created_at"],
+        "summary": manifest["summary"],
+        "manifest_path": str(path),
+        "reused": reused,
+    }
+
+
+def scan_repository(store: Store) -> dict:
+    """Persist or reuse the materialized repository-wide safe engineering scan."""
+    ensure_private_git_exclude(store.repo)
+    manifest = repository_scan_manifest(store.repo)
+    scan_dir = repository_scan_directory(store)
+    destination = safe_child(scan_dir, "scan.json")
+    reused = False
+    with store.lock():
+        if destination.is_symlink():
+            raise XSyncError("拒绝通过符号链接读写 repository scan")
+        if destination.exists() and not destination.is_file():
+            raise XSyncError("repository scan 路径必须是普通文件")
+        current_head, _, current_token = repository_state_token(store.repo)
+        if (current_head != manifest["baseline_commit"]
+                or current_token != manifest["state_token"]):
+            raise XSyncError("工程在扫描完成后又发生变化；请重试 x-sync")
+        existing = None
+        if destination.is_file():
+            with contextlib.suppress(XSyncError):
+                existing = validate_repository_scan(load_json(destination))
+        if isinstance(existing, dict) and existing.get("scan_id") == manifest["scan_id"]:
+            manifest = existing
+            reused = True
+        else:
+            atomic_json(destination, manifest)
+    return repository_scan_response(manifest, destination, reused)
+
+
+def repository_scan_status(store: Store) -> dict:
+    """Read the shared initial-scan gate without enumerating repository files."""
+    scan_dir = repository_scan_directory(store)
+    record = safe_child(scan_dir, "scan.json")
+    missing = {
+        "state": "missing", "required": True, "complete": False,
+        "initial_scan_complete": False,
+        "policy_version": SCAN_POLICY_VERSION,
+    }
+    if not record.is_file() or record.is_symlink():
+        return missing
+    try:
+        manifest = validate_repository_scan(load_json(record), require_current_policy=False)
+        if manifest.get("repo_id") != repo_id(store.repo) or manifest.get("scope", {}).get("type") != "full":
+            raise XSyncError("repository scan 不属于当前完整工程")
+    except XSyncError as exc:
+        return {
+            "state": "invalid", "required": True, "complete": False,
+            "initial_scan_complete": False,
+            "policy_version": SCAN_POLICY_VERSION, "reason": str(exc),
+        }
+    probe_error = None
+    try:
+        current_head, current_status, current_token = repository_state_token(store.repo)
+        if manifest["policy_version"] != SCAN_POLICY_VERSION:
+            state = "stale"
+        elif current_head != manifest["baseline_commit"]:
+            state = "stale"
+        elif current_token != manifest.get("state_token"):
+            state = "stale"
+        elif current_status:
+            # The scan captured this dirty tree exactly, but a cheap status call
+            # cannot prove that same-name untracked content is still identical.
+            state = "captured_dirty"
+        else:
+            state = "fresh"
+    except XSyncError as exc:
+        # A freshness probe must not hide a recoverable unfinished session.
+        state = "unknown"
+        probe_error = str(exc)
+    policy_current = manifest["policy_version"] == SCAN_POLICY_VERSION
+    result = {
+        "state": state,
+        "required": not policy_current,
+        "complete": True,
+        "initial_scan_complete": policy_current,
+        "scan_id": manifest["scan_id"],
+        "policy_version": manifest["policy_version"],
+        "baseline_commit": manifest["baseline_commit"],
+        "created_at": manifest["created_at"],
+        "summary": manifest["summary"],
+        "manifest_path": str(record),
+    }
+    if probe_error:
+        result["reason"] = probe_error
+    return result
+
+
+def require_initial_repository_scan(store: Store) -> None:
+    status = repository_scan_status(store)
+    if status.get("required"):
+        raise XSyncError(
+            "首次运行必须先扫描整个安全工程目录；请执行 `xsync scan --repo <repo> --json`"
+        )
 
 
 def snapshot_evidence(repo: Path, store: Store, paths: list[str] | None,
@@ -534,47 +1171,16 @@ def snapshot_evidence(repo: Path, store: Store, paths: list[str] | None,
         destination = safe_child(store.root, "evidence", f"{record['id']}.json")
         atomic_json(destination, record)
         return {**record, "path": str(destination)}
-    tracked = git(repo, "ls-files", "-z", check=False).split("\0")
-    requested = set(paths or [])
-    records = []
-    for rel in sorted(x for x in tracked if x):
-        rel_path = Path(rel)
-        if requested and not any(rel == p or rel.startswith(p.rstrip("/") + "/") for p in requested):
-            continue
-        if is_sensitive_path(rel_path):
-            continue
-        absolute = (repo / rel_path).resolve()
-        try:
-            absolute.relative_to(repo)
-        except ValueError:
-            continue
-        if not absolute.is_file() or absolute.is_symlink() or absolute.stat().st_size > 1_000_000:
-            continue
-        suffix = absolute.suffix.lower()
-        if suffix not in TEXT_EXTENSIONS and absolute.name.lower() not in {"dockerfile", "makefile"}:
-            continue
-        raw = absolute.read_bytes()
-        if b"\0" in raw[:8192]:
-            continue
-        records.append({"path": rel, "sha256": hashlib.sha256(raw).hexdigest(),
-                        "bytes": len(raw), "lines": raw.count(b"\n") + bool(raw)})
-    commit = git(repo, "rev-parse", "HEAD", check=False) or None
-    log_lines = git(repo, "log", "-n", "50", "--format=%H%x09%s", check=False).splitlines()
-    snapshot = {
-        "schema_version": SCHEMA_VERSION,
-        "repo_id": repo_id(repo), "commit": commit,
-        "dirty": bool(git(repo, "status", "--porcelain", check=False)),
-        "created_at": utc_now(), "files": records,
-        "commits": [{"sha": line.split("\t", 1)[0],
-                     "subject": line.split("\t", 1)[1] if "\t" in line else ""}
-                    for line in log_lines],
-    }
-    digest = hashlib.sha256(canonical_bytes(snapshot)).hexdigest()[:16]
-    snapshot["snapshot_id"] = digest
-    destination = safe_child(store.root, "evidence", f"{digest}.json")
-    atomic_json(destination, snapshot)
-    snapshot["path"] = str(destination)
-    return snapshot
+    snapshot = repository_scan_manifest(repo, paths)
+    destination = safe_child(store.root, "evidence", f"{snapshot['scan_id']}.json")
+    with store.lock():
+        if destination.is_symlink():
+            raise XSyncError("拒绝通过符号链接写入 repository inventory")
+        if destination.exists():
+            snapshot = validate_repository_scan(load_json(destination))
+        else:
+            atomic_json(destination, snapshot)
+    return {**snapshot, "path": str(destination)}
 
 
 def normalize_question(question: dict, index: int) -> dict:
@@ -590,7 +1196,7 @@ def normalize_question(question: dict, index: int) -> dict:
     if q.get("status", "active") not in {"draft", "active", "stale", "disputed", "retired"}:
         raise XSyncError(f"题目 {qid} status 非法")
     q["status"] = q.get("status", "active")
-    if not re.fullmatch(r"[0-9a-f]{40}", str(q.get("baseline_commit", ""))):
+    if not GIT_OID_RE.fullmatch(str(q.get("baseline_commit", ""))):
         raise XSyncError(f"题目 {qid} baseline_commit 必须为完整 Git SHA")
     aliases = {"mcq": "single_choice", "choice": "single_choice", "open": "free_text",
                "free_response": "free_text"}
@@ -770,7 +1376,7 @@ def validate_bank(value: object) -> dict:
     if not isinstance(bank_repo_id, str) or not bank_repo_id.strip():
         raise XSyncError("repo_id 不能为空")
     baseline = bank.get("baseline_commit")
-    if not re.fullmatch(r"[0-9a-f]{40}", str(baseline)):
+    if not GIT_OID_RE.fullmatch(str(baseline)):
         raise XSyncError("baseline_commit 必须为完整 Git SHA")
     created_at = bank.get("created_at")
     try:
@@ -833,7 +1439,7 @@ def validate_bank(value: object) -> dict:
             )):
                 raise XSyncError(f"evidence {item['id']} 行号非法")
         elif source["type"] == "commit":
-            if not re.fullmatch(r"[0-9a-f]{40}", str(source.get("commit", ""))):
+            if not GIT_OID_RE.fullmatch(str(source.get("commit", ""))):
                 raise XSyncError(f"evidence {item['id']} commit 非法")
             if "path" in source:
                 relative = Path(str(source["path"]))
@@ -865,7 +1471,7 @@ def validate_bank(value: object) -> dict:
         if (not isinstance(repository, dict)
                 or not isinstance(repository.get("root_id"), str)
                 or not repository.get("root_id")
-                or not re.fullmatch(r"[0-9a-f]{40}", str(repository.get("baseline_commit", "")))):
+                or not GIT_OID_RE.fullmatch(str(repository.get("baseline_commit", "")))):
             raise XSyncError(f"evidence {item['id']} repository snapshot 非法")
         if repository.get("root_id") != bank_repo_id:
             raise XSyncError(f"evidence {item['id']} 不属于 bank.repo_id")
@@ -959,6 +1565,7 @@ def validate_bank_for_repo(repo: Path, bank: dict) -> None:
 
 def install_bank(store: Store, source: Path) -> dict:
     assert store.project
+    require_initial_repository_scan(store)
     bank = validate_bank(load_json(source))
     validate_bank_for_repo(store.repo, bank)
     validate_evidence_freshness(store.repo, bank)
@@ -1115,6 +1722,7 @@ def start_session(store: Store, bank_id: str, style: str, channel: str,
                   count: int | None = None, focus: str = "mixed",
                   max_depth: int | None = None, task_scope: str | None = None) -> dict:
     assert store.project
+    require_initial_repository_scan(store)
     validate_component(bank_id, " bank id", ID_RE)
     bank_path = safe_child(store.project, "banks", f"{bank_id}.json")
     bank = validate_bank(load_json(bank_path))
@@ -1467,7 +2075,7 @@ def validate_event_payload(event_type: str, payload: object, label: str) -> dict
     if event_type == "session_started":
         if (payload.get("style") not in {"regular", "socratic"}
                 or payload.get("channel") not in {"terminal", "web"}
-                or not re.fullmatch(r"[0-9a-f]{40}", str(payload.get("baseline_commit", "")))
+                or not GIT_OID_RE.fullmatch(str(payload.get("baseline_commit", "")))
                 or not isinstance(payload.get("focus_topics"), list)
                 or not all(isinstance(topic, str) for topic in payload["focus_topics"])):
             raise XSyncError(f"{label} session_started payload 非法")
@@ -1925,6 +2533,7 @@ def learner_status(store: Store) -> dict:
     summary = {
         "learner": store.learner, "repository": str(store.repo),
         "profile_exists": isinstance(profile, dict), "active_session": None,
+        "repository_scan": repository_scan_status(store),
         "bank_ids": sorted(path.stem for path in (store.project / "banks").glob("*.json")),
         "reviewed_questions": len(mastery.get("reviews", [])) if isinstance(mastery, dict) else 0,
         "due_question_ids": mastery.get("due_question_ids", []) if isinstance(mastery, dict) else [],
@@ -2957,6 +3566,7 @@ def parser() -> argparse.ArgumentParser:
 
     doctor = sub.add_parser("doctor"); repo_arg(doctor); json_arg(doctor)
     init = sub.add_parser("init"); learner_args(init, False); json_arg(init)
+    scan = sub.add_parser("scan"); repo_arg(scan); json_arg(scan)
     evidence = sub.add_parser("evidence"); evsub = evidence.add_subparsers(dest="evidence_command", required=True)
     snapshot = evsub.add_parser("snapshot"); repo_arg(snapshot); snapshot.add_argument("--paths", nargs="*")
     snapshot.add_argument("--kind"); snapshot.add_argument("--path"); snapshot.add_argument("--lines")
@@ -3007,9 +3617,12 @@ def main(argv: list[str] | None = None) -> int:
                       "default_learner": default_learner(),
                       "head_commit": git(repo, "rev-parse", "HEAD", check=False) or None,
                       "working_tree": working_tree_state(repo),
+                      "repository_scan": repository_scan_status(store),
                       "git": bool(shutil.which("git")), "stdlib_only": True}
         elif args.command == "init":
             result = init_profile(store)
+        elif args.command == "scan":
+            result = scan_repository(store)
         elif args.command == "evidence":
             result = snapshot_evidence(repo, store, args.paths, args.kind, args.path,
                                        args.lines, args.summary, args.commit, args.claim_type)

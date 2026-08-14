@@ -1,6 +1,7 @@
 import importlib.util
 import hashlib
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -80,6 +81,7 @@ class RuntimeTest(unittest.TestCase):
         subprocess.run(["git", "-C", str(self.repo), "commit", "-qm", "spec"], check=True)
         self.store = xsync.Store(self.repo, "alice")
         xsync.init_profile(self.store)
+        xsync.scan_repository(self.store)
         commit = xsync.git(self.repo, "rev-parse", "HEAD")
         self.bank_path = self.repo / "bank.json"
         self.repository_id = xsync.repo_id(self.repo)
@@ -957,6 +959,176 @@ class RuntimeTest(unittest.TestCase):
         self.assertEqual({"business", "architecture_data_flow", "technical_mechanisms",
                           "decisions_bugs", "non_functional"},
                          set(report["human_repository_profile"]))
+
+    def test_first_repository_scan_covers_the_entire_safe_engineering_tree(self):
+        (self.repo / ".gitignore").write_text("ignored.txt\n", encoding="utf-8")
+        (self.repo / "ignored.txt").write_text("do not inventory\n", encoding="utf-8")
+        (self.repo / "node_modules").mkdir()
+        (self.repo / "node_modules" / "dep.js").write_text("third party\n", encoding="utf-8")
+        (self.repo / ".env.production").write_text("TOKEN=secret\n", encoding="utf-8")
+        subprocess.run([
+            "git", "-C", str(self.repo), "add", "-f", ".gitignore",
+            "node_modules/dep.js", ".env.production",
+        ], check=True)
+        subprocess.run(["git", "-C", str(self.repo), "commit", "-qm", "scan fixtures"], check=True)
+
+        (self.repo / "notes").mkdir()
+        (self.repo / "notes" / "架构.md").write_text("system map\n", encoding="utf-8")
+        (self.repo / "secrets.yaml").write_text("api_key: SUPER-SECRET\n", encoding="utf-8")
+        (self.repo / "credentials.yml").write_text("password: hidden\n", encoding="utf-8")
+        (self.repo / "token.txt").write_text("hidden-token\n", encoding="utf-8")
+        (self.repo / "late-binary.dat").write_bytes(b"a" * 9000 + b"\0tail")
+        (self.repo / "invalid.dat").write_bytes(b"\xff\xfe")
+        (self.repo / "large.txt").write_bytes(
+            b"x" * (xsync.MAX_FOCUSED_EVIDENCE_BYTES + 1)
+        )
+        (self.repo / "link.txt").symlink_to("spec.md")
+
+        opened = []
+        original = xsync.scan_relative_file
+
+        def recording_reader(repo, relative):
+            opened.append(relative.as_posix())
+            return original(repo, relative)
+
+        with mock.patch.object(xsync, "scan_relative_file", side_effect=recording_reader):
+            result = xsync.scan_repository(self.store)
+        manifest = xsync.validate_repository_scan(
+            json.loads(Path(result["manifest_path"]).read_text(encoding="utf-8"))
+        )
+        by_path = {item["path"]: item for item in manifest["files"]}
+        self.assertIn("spec.md", by_path)
+        self.assertEqual("tracked", by_path["spec.md"]["source"])
+        self.assertEqual("untracked", by_path["notes/架构.md"]["source"])
+        for excluded in (
+            "ignored.txt", "node_modules/dep.js", ".env.production",
+            "secrets.yaml", "credentials.yml", "token.txt", "late-binary.dat",
+            "invalid.dat", "large.txt", "link.txt",
+        ):
+            with self.subTest(excluded=excluded):
+                self.assertNotIn(excluded, by_path)
+        self.assertNotIn("ignored.txt", opened)
+        self.assertNotIn("node_modules/dep.js", opened)
+        self.assertNotIn(".env.production", opened)
+        self.assertNotIn("secrets.yaml", opened)
+        self.assertNotIn("credentials.yml", opened)
+        self.assertNotIn("token.txt", opened)
+        exclusions = manifest["summary"]["excluded"]
+        self.assertGreaterEqual(exclusions["generated_or_vendor"], 1)
+        self.assertGreaterEqual(exclusions["sensitive"], 1)
+        self.assertGreaterEqual(exclusions["binary_or_non_utf8"], 2)
+        self.assertGreaterEqual(exclusions["oversized"], 1)
+        self.assertGreaterEqual(exclusions["symlink"], 1)
+        self.assertTrue(manifest["complete"])
+
+    def test_repository_scan_is_content_idempotent_and_status_exposes_gate(self):
+        first = xsync.scan_repository(self.store)
+        scan_path = Path(first["manifest_path"])
+        before = (scan_path.read_bytes(), scan_path.stat().st_mtime_ns)
+        second = xsync.scan_repository(self.store)
+        after = (scan_path.read_bytes(), scan_path.stat().st_mtime_ns)
+        self.assertEqual(first["scan_id"], second["scan_id"])
+        self.assertTrue(second["reused"])
+        self.assertEqual(before, after)
+        manifest = json.loads(scan_path.read_text(encoding="utf-8"))
+        self.assertEqual(1, next(
+            item["lines"] for item in manifest["files"] if item["path"] == "spec.md"
+        ))
+
+        status = xsync.learner_status(self.store)["repository_scan"]
+        self.assertTrue(status["initial_scan_complete"])
+        self.assertFalse(status["required"])
+        (self.repo / "new-untracked.md").write_text("new knowledge\n", encoding="utf-8")
+        self.assertEqual("stale", xsync.repository_scan_status(self.store)["state"])
+        refreshed = xsync.scan_repository(self.store)
+        self.assertNotEqual(first["scan_id"], refreshed["scan_id"])
+
+    def test_scan_rejects_same_status_content_change_after_candidate_recheck(self):
+        race = self.repo / "race.txt"
+        race.write_text("AAAA\n", encoding="utf-8")
+        prior = xsync.scan_repository(self.store)
+        scan_path = Path(prior["manifest_path"])
+        preserved = scan_path.read_bytes()
+        original_stat = race.stat()
+        original_verify = xsync.verify_scan_candidates
+
+        def mutate_after_recheck(repo, observations):
+            original_verify(repo, observations)
+            race.write_text("BBBB\n", encoding="utf-8")
+            os.utime(race, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns))
+
+        with mock.patch.object(xsync, "verify_scan_candidates", side_effect=mutate_after_recheck):
+            with self.assertRaisesRegex(xsync.XSyncError, "扫描期间发生变化"):
+                xsync.scan_repository(self.store)
+        self.assertEqual(preserved, scan_path.read_bytes())
+
+    def test_scan_freshness_probe_failure_does_not_hide_active_session(self):
+        started = xsync.start_session(
+            self.store, "fixture-bank", "regular", "terminal", count=1,
+            focus="business",
+        )
+        with mock.patch.object(
+            xsync, "repository_state_token", side_effect=xsync.XSyncError("probe unavailable")
+        ):
+            status = xsync.learner_status(self.store)
+        self.assertEqual("unknown", status["repository_scan"]["state"])
+        self.assertFalse(status["repository_scan"]["required"])
+        self.assertEqual(started["session_id"], status["active_session"]["session_id"])
+
+    def test_missing_scan_blocks_bank_use_until_explicit_full_scan(self):
+        scan_path = xsync.repository_scan_directory(self.store) / "scan.json"
+        scan_path.unlink()
+        status = xsync.repository_scan_status(self.store)
+        self.assertTrue(status["required"])
+        with self.assertRaisesRegex(xsync.XSyncError, "首次运行必须先扫描"):
+            xsync.start_session(self.store, "fixture-bank", "regular", "terminal")
+        xsync.scan_repository(self.store)
+        started = xsync.start_session(
+            self.store, "fixture-bank", "regular", "terminal", count=1,
+            focus="business",
+        )
+        self.assertEqual("question_open", started["session"]["status"])
+
+    def test_scan_cli_and_non_git_failure_are_explicit(self):
+        command = [sys.executable, str(SCRIPT), "scan", "--repo", str(self.repo), "--json"]
+        completed = subprocess.run(
+            command, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True
+        )
+        payload = json.loads(completed.stdout)
+        self.assertTrue(payload["complete"])
+        self.assertTrue(Path(payload["manifest_path"]).is_file())
+
+        with tempfile.TemporaryDirectory() as directory:
+            plain = Path(directory)
+            (plain / "source.py").write_text("print('hello')\n", encoding="utf-8")
+            plain_store = xsync.Store(plain)
+            with self.assertRaisesRegex(xsync.XSyncError, "需要 Git 仓库"):
+                xsync.scan_repository(plain_store)
+            self.assertFalse((plain / ".x-sync" / "repositories").exists())
+
+    def test_scan_rejects_sparse_and_supports_sha256_git_object_ids(self):
+        with tempfile.TemporaryDirectory() as directory:
+            sparse = Path(directory)
+            subprocess.run(["git", "init", "-q", str(sparse)], check=True)
+            subprocess.run(["git", "-C", str(sparse), "config", "core.sparseCheckout", "true"], check=True)
+            with self.assertRaisesRegex(xsync.XSyncError, "不支持 sparse checkout"):
+                xsync.scan_repository(xsync.Store(sparse))
+
+        with tempfile.TemporaryDirectory() as directory:
+            sha_repo = Path(directory)
+            initialized = subprocess.run(
+                ["git", "init", "-q", "--object-format=sha256", str(sha_repo)],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            )
+            if initialized.returncode:
+                self.skipTest("installed Git does not support SHA-256 repositories")
+            subprocess.run(["git", "-C", str(sha_repo), "config", "user.email", "test@example.com"], check=True)
+            subprocess.run(["git", "-C", str(sha_repo), "config", "user.name", "Test"], check=True)
+            (sha_repo / "source.py").write_text("print('ok')\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(sha_repo), "add", "source.py"], check=True)
+            subprocess.run(["git", "-C", str(sha_repo), "commit", "-qm", "initial"], check=True)
+            result = xsync.scan_repository(xsync.Store(sha_repo))
+            self.assertEqual(64, len(result["baseline_commit"]))
 
     def test_bare_start_defaults_and_explicit_overrides(self):
         defaults = xsync.parser().parse_args([

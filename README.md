@@ -15,6 +15,7 @@ X-Sync 是一个基于仓库证据的自适应问答 Skill，用来持续发现�
 - 从 Spec、Story、ADR、Commit、Bug Fix、测试和核心代码生成问题；
 - 从项目代码扩展到框架、MySQL、Redis、网络、OS、Docker、性能、事务、一致性、安全与可观测性；
 - 终端答题与本地 HTML 答题；
+- 首次运行先建立整个安全工程目录的可验证扫描清单；
 - 按用户保存答题事件、证据、复习计划和多维学习画像；
 - Codex 与 Claude Code 共用同一份 `SKILL.md`、运行时和数据格式；
 - Python 标准库本地运行，不在运行时调用模型 API。
@@ -69,7 +70,15 @@ $x-sync
 - 5 道题；
 - 从仓库证据中选择一个有边界的 onboarding 范围。
 
-未完成的会话会优先恢复，不会被默认配置覆盖。首次准备题库可能需要等待 Agent 阅读 Spec、Commit、测试与核心代码；页面打开后即可开始作答。
+未完成的会话会优先恢复，不会被默认配置覆盖。准备第一个新会话前，X-Sync 必须先扫描整个安全工程目录，然后才会判断能否复用题库或需要生成新题库。扫描范围包含 Git 已跟踪和未忽略的未跟踪普通文件；每个合格文件都会被枚举、分类并计算内容指纹，再由 Agent 从文档、源码、测试、配置、迁移、基础设施与历史中选择有依据的问题。
+
+“整个工程”不等于读取已知的凭据文件或第三方缓存：`.git/`、`.x-sync/`、`.env*`、常见 secret/credential/token 配置和密钥、vendor/依赖与构建产物、Git ignored 文件、二进制、超大文件、符号链接及 submodule 都不会作为扫描内容打开。首次门禁完成后，后续调用不会仅因启动 X-Sync 就重复全量扫描；仓库或任务变化时仍会按状态和证据新鲜度定向刷新。完整扫描要求至少有一个 commit 的普通 Git worktree，非 Git 目录、unborn repository 或 sparse checkout 会明确停止。
+
+也可以手动重建清单：
+
+```bash
+python3 skills/x-sync/scripts/xsync.py scan --repo /path/to/repository --json
+```
 
 ## 覆盖默认值
 
@@ -99,6 +108,8 @@ HTML 页面保存答案后，回到 Codex 或 Claude Code 输入：
 
 ```text
 .x-sync/
+  repositories/<repo-id>/
+    scan.json
   users/<learner>/
     profile.json
     projects/<repo-id>/
