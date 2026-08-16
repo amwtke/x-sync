@@ -12,6 +12,7 @@ import time
 from types import FrameType
 from typing import BinaryIO, Never, TextIO
 
+from .bootstrap import bootstrap_config, read_bootstrap_manifest
 from .event_codec import PROTOCOL_VERSION, SCHEMA_VERSION, canonical_json_bytes
 from .host_ipc import HostIpcServer
 from .runtime import DialogueRuntime
@@ -44,6 +45,7 @@ def _parser() -> _ArgumentParser:
     serve.add_argument("--host-socket", required=True)
     serve.add_argument("--browser-port", type=int, default=0)
     serve.add_argument("--keepalive-seconds", type=float, default=15.0)
+    serve.add_argument("--bootstrap-manifest")
     serve.add_argument("--stream-json", action="store_true")
     return parser
 
@@ -127,7 +129,22 @@ def _serve(
     ) as runtime:
         resolution = runtime.recover()
         if resolution is None:
-            raise RuntimeCliError("NO_ACTIVE_DIALOGUE")
+            manifest_path = arguments.bootstrap_manifest
+            if manifest_path is None:
+                raise RuntimeCliError("NO_ACTIVE_DIALOGUE")
+            manifest = read_bootstrap_manifest(manifest_path)
+            snapshot = runtime.evidence.capture(
+                manifest.session_id,
+                manifest.evidence_sources,
+                captured_at=manifest.created_at,
+            )
+            resolution = runtime.resolve(
+                bootstrap_config(
+                    manifest,
+                    arguments.repository_id,
+                    snapshot.snapshot_digest,
+                )
+            )
         host_server = runtime.start_host_ipc(arguments.host_socket)
         browser_server = runtime.start_browser(
             resolution.config.session_id,

@@ -171,6 +171,135 @@ class RuntimeCliTest(unittest.TestCase):
         self.assertEqual(b"", output.getvalue())
         self.assertEqual("NO_ACTIVE_DIALOGUE\n", errors.getvalue())
 
+    def test_serve_bootstraps_an_empty_registry_from_focused_evidence(self) -> None:
+        empty_state = self.state.parent / "bootstrap-state"
+        empty_state.mkdir(mode=0o700)
+        manifest = self.control / "bootstrap.json"
+        manifest.write_text(
+            json.dumps(
+                {
+                    "schema_version": 2,
+                    "record_type": "dialogue_bootstrap_manifest",
+                    "protocol_version": "x-sync-dialogue/2",
+                    "session_id": "session-bootstrap",
+                    "learner_id": "learner-1",
+                    "created_at": "2026-08-16T22:30:00+08:00",
+                    "task_scope": "Understand the durable runtime boundary",
+                    "language": "zh-CN",
+                    "channel": "web",
+                    "style": "socratic",
+                    "focus": "mixed",
+                    "question_count": 5,
+                    "evidence_sources": [
+                        {
+                            "evidence_id": "evidence.runtime",
+                            "kind": "spec",
+                            "claim_type": "implementation",
+                            "claim": "The runtime uses durable state machines.",
+                            "relative_path": "architecture.md",
+                            "start_line": 1,
+                            "end_line": 1,
+                            "imported_from": None,
+                        }
+                    ],
+                },
+                separators=(",", ":"),
+                sort_keys=True,
+            ),
+            encoding="utf-8",
+        )
+        manifest.chmod(0o600)
+        output = BytesIO()
+        errors = StringIO()
+
+        status = main(
+            [
+                "serve",
+                "--state",
+                str(empty_state),
+                "--repo",
+                str(self.repo),
+                "--repository-id",
+                "repository-1",
+                "--registry",
+                "registry-bootstrap",
+                "--host-socket",
+                str(self.socket_path),
+                "--bootstrap-manifest",
+                str(manifest),
+                "--stream-json",
+            ],
+            stdout=output,
+            stderr=errors,
+            wait_for_shutdown=lambda _server: "test-complete",
+        )
+
+        self.assertEqual(0, status)
+        self.assertEqual("", errors.getvalue())
+        events = [json.loads(line) for line in output.getvalue().splitlines()]
+        self.assertEqual("session-bootstrap", events[0]["session_id"])
+        with DialogueRuntime(
+            empty_state,
+            "registry-bootstrap",
+            "runtime-recovery",
+            repository_directory=self.repo,
+            repository_id="repository-1",
+            lease_clock=lambda: 1_000,
+            browser_clock=lambda: "2026-08-16T22:31:00+08:00",
+            monotonic_clock=lambda: 1_000.0,
+        ) as runtime:
+            recovered = runtime.recover()
+            self.assertIsNotNone(recovered)
+            assert recovered is not None
+            self.assertEqual("session-bootstrap", recovered.config.session_id)
+            self.assertRegex(
+                recovered.config.runtime_epoch,
+                r"\Abootstrap\.[0-9a-f]{48}\Z",
+            )
+            self.assertEqual(
+                "current",
+                runtime.evidence.verify(recovered.config).health.value,
+            )
+
+    def test_bootstrap_manifest_is_only_read_for_an_empty_registry(self) -> None:
+        status, lines, errors, _servers = self.run_cli(
+            "--bootstrap-manifest",
+            str(self.control / "does-not-exist.json"),
+            "--stream-json",
+        )
+        self.assertEqual(0, status)
+        self.assertEqual(2, len(lines))
+        self.assertEqual("", errors)
+
+        empty_state = self.state.parent / "invalid-bootstrap-state"
+        empty_state.mkdir(mode=0o700)
+        output = BytesIO()
+        errors = StringIO()
+        status = main(
+            [
+                "serve",
+                "--state",
+                str(empty_state),
+                "--repo",
+                str(self.repo),
+                "--repository-id",
+                "repository-1",
+                "--registry",
+                "registry-invalid",
+                "--host-socket",
+                str(self.socket_path),
+                "--bootstrap-manifest",
+                str(self.control / "does-not-exist.json"),
+                "--stream-json",
+            ],
+            stdout=output,
+            stderr=errors,
+            wait_for_shutdown=lambda _server: "unused",
+        )
+        self.assertEqual(2, status)
+        self.assertEqual(b"", output.getvalue())
+        self.assertEqual("BOOTSTRAP_MANIFEST_UNAVAILABLE\n", errors.getvalue())
+
     def test_local_clock_signal_output_and_error_boundaries_are_stable(self) -> None:
         self.assertRegex(runtime_cli._runtime_epoch(), r"\Aruntime\.[0-9a-f]{32}\Z")
         self.assertRegex(

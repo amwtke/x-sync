@@ -26,6 +26,13 @@ from xsync_v2.browser_service import (
     SubmitTurnIntent,
     SwitchTopicIntent,
 )
+from xsync_v2.bootstrap import (
+    DialogueBootstrapError,
+    DialogueBootstrapManifest,
+    bootstrap_config,
+    decode_bootstrap_manifest,
+    read_bootstrap_manifest,
+)
 from xsync_v2.coordinator import (
     DialogueCoordinator,
     decode_session_config,
@@ -409,6 +416,11 @@ class ArchitectureTest(unittest.TestCase):
             RuntimeEpochAuthority.__call__,
             RuntimeCliError,
             runtime_cli_main,
+            DialogueBootstrapError,
+            DialogueBootstrapManifest,
+            bootstrap_config,
+            decode_bootstrap_manifest,
+            read_bootstrap_manifest,
             SecureDirectoryIdentity,
             SecureDirectory,
             SecureDirectory.identity,
