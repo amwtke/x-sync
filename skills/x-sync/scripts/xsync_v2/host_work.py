@@ -39,6 +39,7 @@ from .domain import (
     SessionStarted,
     StartTopic,
     TopicClarificationAnswered,
+    TopicExplorationRequested,
     TopicResumed,
     TopicSelectionSubmitted,
     TopicStarted,
@@ -222,6 +223,8 @@ def _created_trigger(event: CommittedDialogueEvent) -> TriggerBinding | None:
     if type(payload) is TopicClarificationAnswered:
         return payload.next_trigger
     if type(payload) is TopicSwitchRequested:
+        return payload.candidate_trigger
+    if type(payload) is TopicExplorationRequested:
         return payload.candidate_trigger
     if type(payload) is TopicStarted:
         return payload.initial_trigger

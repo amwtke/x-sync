@@ -28,6 +28,7 @@ from .domain import (
     DialogueState,
     EvidenceCheck,
     EvidenceHealth,
+    ExploreTopics,
     Lens,
     PauseTopic,
     RecoverWork,
@@ -128,6 +129,11 @@ class SwitchTopicIntent:
 
 
 @dataclass(frozen=True, slots=True)
+class ExploreTopicsIntent:
+    """Learner request for fresh candidates while no Topic is active."""
+
+
+@dataclass(frozen=True, slots=True)
 class ResumeTopicIntent:
     """Learner request to resume one paused Topic Run."""
 
@@ -151,6 +157,7 @@ BrowserIntent: TypeAlias = (
     | RequestHelpIntent
     | PauseTopicIntent
     | SwitchTopicIntent
+    | ExploreTopicsIntent
     | ResumeTopicIntent
     | RecoverWorkIntent
 )
@@ -327,6 +334,7 @@ class BrowserCommandService:
                 RequestHelpIntent,
                 PauseTopicIntent,
                 SwitchTopicIntent,
+                ExploreTopicsIntent,
                 ResumeTopicIntent,
                 RecoverWorkIntent,
             }
@@ -414,6 +422,8 @@ class BrowserCommandService:
             return PauseTopic(command_id)
         if type(intent) is SwitchTopicIntent:
             return SwitchTopic(command_id)
+        if type(intent) is ExploreTopicsIntent:
+            return ExploreTopics(command_id)
         if type(intent) is ResumeTopicIntent:
             return ResumeTopic(command_id, intent.topic_run_id)
         if type(intent) is RecoverWorkIntent:
@@ -465,6 +475,8 @@ class BrowserCommandService:
             intent_tree = {"type": "pause_topic"}
         elif type(intent) is SwitchTopicIntent:
             intent_tree = {"type": "switch_topic"}
+        elif type(intent) is ExploreTopicsIntent:
+            intent_tree = {"type": "explore_topics"}
         elif type(intent) is ResumeTopicIntent:
             intent_tree = {
                 "type": "resume_topic",
@@ -571,6 +583,16 @@ class BrowserCommandService:
                 input_digest,
                 evidence.evidence_digest,
             )
+        elif type(intent) is ExploreTopicsIntent:
+            trigger = TriggerBinding(
+                TriggerKind.TOPIC_CANDIDATES,
+                work_id,
+                config.runtime_epoch,
+                None,
+                None,
+                input_digest,
+                evidence.evidence_digest,
+            )
         elif type(intent) is ResumeTopicIntent:
             paused = next(
                 (
@@ -645,6 +667,7 @@ __all__ = [
     "BrowserIntent",
     "BrowserServiceError",
     "CustomTopicIntent",
+    "ExploreTopicsIntent",
     "PauseTopicIntent",
     "RecoverWorkIntent",
     "RequestHelpIntent",

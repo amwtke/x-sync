@@ -97,6 +97,7 @@ class WorkWakeObserverTest(unittest.TestCase):
             "help_requested",
             "topic_resumed",
             "topic_switch_requested",
+            "topic_exploration_requested",
             "work_requeued",
             "work_recovery_requested",
         )

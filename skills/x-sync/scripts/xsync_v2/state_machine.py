@@ -24,6 +24,7 @@ from .domain import (
     DialogueState,
     EvidenceCheck,
     EvidenceHealth,
+    ExploreTopics,
     FencedQuiesceContext,
     GateAssessment,
     GateId,
@@ -65,6 +66,7 @@ from .domain import (
     TopicClarificationRequested,
     TopicCompleted,
     TopicContract,
+    TopicExplorationRequested,
     TopicLifecycle,
     TopicPaused,
     TopicResumed,
@@ -1219,6 +1221,8 @@ def _complete_topic(
             fingerprint,
         ),
     )
+
+
 def _switch_topic(
     state: DialogueState, command: DialogueCommand, context: DecisionContext
 ) -> Decision:
@@ -1239,6 +1243,29 @@ def _switch_topic(
         command.command_id,
         TopicSwitchRequested(topic.topic_run_id, trigger),
     )
+
+
+def _explore_topics(
+    state: DialogueState, command: DialogueCommand, context: DecisionContext
+) -> Decision:
+    if type(command) is not ExploreTopics:
+        return Rejected("TOPIC_STATE_CONFLICT")
+    if (
+        state.phase is not ConversationPhase.NONE
+        or state.active_topic is not None
+        or state.session_work is not None
+        or not (state.completed_topics or state.paused_topics)
+    ):
+        return Rejected("TOPIC_STATE_CONFLICT")
+    trigger = _matching_trigger(
+        context.trigger,
+        TriggerKind.TOPIC_CANDIDATES,
+        None,
+        context.evidence.evidence_digest,
+    )
+    if trigger is None:
+        return Rejected("VALIDATION_FAILED")
+    return _accept(command.command_id, TopicExplorationRequested(trigger))
 
 
 def _resume_topic(
@@ -1530,6 +1557,7 @@ TRANSITION_TABLE: dict[type, Handler] = {
     CompleteTopic: _complete_topic,
     PauseTopic: _pause_topic,
     SwitchTopic: _switch_topic,
+    ExploreTopics: _explore_topics,
     ResumeTopic: _resume_topic,
     ReportWorkFailure: _report_work_failure,
     RecoverWork: _recover_work,
@@ -1879,6 +1907,7 @@ EVENT_PAYLOAD_TYPES = frozenset(
         LearnerTurnSubmitted,
         TopicPaused,
         TopicSwitchRequested,
+        TopicExplorationRequested,
         SessionDeactivationPrepared,
         TopicResumed,
         WorkFailed,
@@ -1985,6 +2014,8 @@ def _valid_event_payload_shape(payload: object) -> bool:
                 or is_canonical_trigger_binding(payload.superseded_trigger)
             )
         )
+    if type(payload) is TopicExplorationRequested:
+        return is_canonical_trigger_binding(payload.candidate_trigger)
     if type(payload) is TopicResumed:
         return (
             _valid_text(payload.topic_run_id)
@@ -2513,6 +2544,31 @@ def reduce(
             next_state,
             active_topic=None,
             paused_topics=(*state.paused_topics, paused),
+            candidates=(),
+            selected_candidate=None,
+            topic_clarification=None,
+            session_work=_queued_work_from_event(
+                state.session_id,
+                event,
+                payload.candidate_trigger,
+            ),
+            phase=ConversationPhase.WAITING_HOST,
+        )
+    elif type(payload) is TopicExplorationRequested:
+        _require(
+            state.phase is ConversationPhase.NONE
+            and state.active_topic is None
+            and state.session_work is None
+            and bool(state.completed_topics or state.paused_topics)
+            and _valid_trigger(
+                payload.candidate_trigger,
+                TriggerKind.TOPIC_CANDIDATES,
+                None,
+                payload.candidate_trigger.evidence_digest,
+            )
+        )
+        next_state = replace(
+            next_state,
             candidates=(),
             selected_candidate=None,
             topic_clarification=None,

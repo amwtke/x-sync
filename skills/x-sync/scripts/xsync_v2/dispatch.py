@@ -19,6 +19,7 @@ from .domain import (
     TopicClarificationAnswered,
     TopicClarificationRequested,
     TopicCompleted,
+    TopicExplorationRequested,
     TopicPaused,
     TopicResumed,
     TopicSelectionSubmitted,
@@ -293,6 +294,8 @@ def _dialogue_payload_view(event: CommittedDialogueEvent) -> ImmutablePayloadVie
                 ("next_suggestion", summary.next_suggestion),
             ),
         )
+    if type(payload) is TopicExplorationRequested:
+        return ImmutablePayloadView("topic_exploration_requested", ())
     if type(payload) in {WorkFailed, WorkDeadLettered}:
         return ImmutablePayloadView("state_changed", ())
     if type(payload) is WorkRequeued:

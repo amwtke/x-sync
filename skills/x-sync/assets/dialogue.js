@@ -237,7 +237,8 @@
     const panel = byId("completed");
     const list = byId("completed-list");
     const topics = state.completed_topics || [];
-    panel.hidden = topics.length === 0;
+    const canExplore = state.allowed_actions.includes("explore");
+    panel.hidden = topics.length === 0 && !canExplore;
     list.replaceChildren();
     topics.forEach((topic) => {
       const article = document.createElement("article");
@@ -248,6 +249,13 @@
       article.append(title, takeaway);
       list.append(article);
     });
+    const explore = byId("explore");
+    explore.hidden = !canExplore;
+    explore.onclick = () => mutate(
+      "/api/v2/topic",
+      { action: "explore" },
+      "explore-topics",
+    );
   }
 
   function render(state) {

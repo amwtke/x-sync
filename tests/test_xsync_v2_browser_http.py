@@ -31,6 +31,7 @@ from xsync_v2.domain import (
     DialogueState,
     EvidenceCheck,
     EvidenceHealth,
+    ExploreTopics,
     GateAssessment,
     GateId,
     Lens,
@@ -247,10 +248,27 @@ class BrowserHttpTest(unittest.TestCase):
         response = self.api.handle(request("GET", "/api/v2/state"))
         payload = json.loads(response.body)
 
-        self.assertEqual([], payload["allowed_actions"])
+        self.assertEqual(["explore"], payload["allowed_actions"])
         projected = payload["completed_topics"][0]["summary"]
         self.assertEqual(summary.takeaway, projected["takeaway"])
         self.assertNotIn(digest("evidence"), response.body.decode())
+
+        explored = self.api.handle(
+            request(
+                "POST",
+                "/api/v2/topic",
+                body={"action": "explore"},
+                headers=(
+                    ("Content-Type", "application/json"),
+                    ("Idempotency-Key", "explore-key"),
+                    ("If-Match", '"conversation-v5"'),
+                ),
+            )
+        )
+        self.assertEqual(200, explored.status)
+        execution = self.coordinator.requests[-1]
+        self.assertIs(type(execution.command), ExploreTopics)
+        self.assertIs(TriggerKind.TOPIC_CANDIDATES, execution.context.trigger.kind)
 
     def test_turn_headers_and_body_become_one_typed_command(self) -> None:
         headers = (

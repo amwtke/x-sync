@@ -20,6 +20,7 @@ from .browser_service import (
     BrowserIntent,
     BrowserServiceError,
     CustomTopicIntent,
+    ExploreTopicsIntent,
     PauseTopicIntent,
     RecoverWorkIntent,
     RequestHelpIntent,
@@ -237,6 +238,10 @@ def _allowed_actions(state: DialogueState) -> tuple[str, ...]:
         actions.add("answer_clarification")
     if state.phase is ConversationPhase.NONE and state.paused_topics:
         actions.add("resume")
+    if state.phase is ConversationPhase.NONE and (
+        state.paused_topics or state.completed_topics
+    ):
+        actions.add("explore")
     if state.phase is ConversationPhase.RECOVERABLE_ERROR:
         actions.add("recover")
     return tuple(sorted(actions))
@@ -615,6 +620,8 @@ class BrowserApi:
             return PauseTopicIntent()
         if action == "switch" and set(body) == {"action"}:
             return SwitchTopicIntent()
+        if action == "explore" and set(body) == {"action"}:
+            return ExploreTopicsIntent()
         if action == "resume" and set(body) == {"action", "topic_run_id"}:
             topic_run_id = body["topic_run_id"]
             if type(topic_run_id) is not str:

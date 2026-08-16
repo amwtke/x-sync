@@ -23,6 +23,7 @@ from xsync_v2.domain import (
     DecisionContext,
     EvidenceCheck,
     EvidenceHealth,
+    ExploreTopics,
     GateAssessment,
     GateId,
     GateRequirement,
@@ -55,7 +56,7 @@ from xsync_v2.domain import (
     SwitchTopic,
     TaskScope,
     TopicContract,
-    TopicCompleted,
+    TopicExplorationRequested,
     TopicLifecycle,
     TopicPaused,
     TopicResumed,
@@ -217,7 +218,10 @@ def commit_for_test(state, pending):
 
 
 def default_context(state, command):
-    if isinstance(command, (StartSession, PresentCandidates, SwitchTopic)):
+    if isinstance(
+        command,
+        (StartSession, PresentCandidates, SwitchTopic, ExploreTopics),
+    ):
         return context(TriggerKind.TOPIC_CANDIDATES)
     if isinstance(command, (SelectTopic, SubmitCustomTopic)):
         return context(TriggerKind.TOPIC_SELECTION)
@@ -675,23 +679,28 @@ class StateMachineTest(unittest.TestCase):
         self.assertIs(TopicLifecycle.COMPLETED, state.completed_topics[0].lifecycle)
         self.assertEqual(summary, state.completed_topics[0].summary)
 
-        payload = TopicCompleted(
-            "topic-1",
-            summary,
-            context(TriggerKind.LEARNER_REPLY).trigger,
-            EvidenceCheck(EvidenceHealth.CURRENT, digest("evidence")),
-            0,
-            digest("evidence"),
+        state = apply(state, ExploreTopics("explore-next"))
+        self.assertIs(ConversationPhase.WAITING_HOST, state.phase)
+        self.assertIsNotNone(state.session_work)
+        assert state.session_work is not None
+        self.assertIs(
+            TriggerKind.TOPIC_CANDIDATES,
+            state.session_work.trigger.kind,
+        )
+        self.assertEqual(1, len(state.completed_topics))
+
+        payload = TopicExplorationRequested(
+            context(TriggerKind.TOPIC_CANDIDATES).trigger,
         )
         with self.assertRaisesRegex(ValueError, "ILLEGAL_EVENT_TRANSITION"):
             reduce(
                 state,
                 CommittedDialogueEvent(
-                    "event-duplicate-completion",
+                    "event-duplicate-exploration",
                     state.sequence + 1,
                     state.conversation_version,
                     state.conversation_version + 1,
-                    "duplicate-completion",
+                    "duplicate-exploration",
                     payload,
                 ),
             )

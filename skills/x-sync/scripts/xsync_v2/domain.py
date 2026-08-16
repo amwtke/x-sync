@@ -427,6 +427,13 @@ class SwitchTopic:
 
 
 @dataclass(frozen=True, slots=True)
+class ExploreTopics:
+    """Request fresh candidates while no Topic Run is active."""
+
+    command_id: str
+
+
+@dataclass(frozen=True, slots=True)
 class ResumeTopic:
     command_id: str
     topic_run_id: str
@@ -478,6 +485,7 @@ DialogueCommand: TypeAlias = (
     | SubmitLearnerTurn
     | PauseTopic
     | SwitchTopic
+    | ExploreTopics
     | ResumeTopic
     | ReportWorkFailure
     | RecoverWork
@@ -592,6 +600,13 @@ class TopicSwitchRequested:
 
 
 @dataclass(frozen=True, slots=True)
+class TopicExplorationRequested:
+    """Durable candidate work created from an inactive Session."""
+
+    candidate_trigger: TriggerBinding
+
+
+@dataclass(frozen=True, slots=True)
 class SessionDeactivationPrepared:
     handoff_id: str
     fence_generation: int
@@ -663,6 +678,7 @@ DialogueEventPayload: TypeAlias = (
     | LearnerTurnSubmitted
     | TopicPaused
     | TopicSwitchRequested
+    | TopicExplorationRequested
     | SessionDeactivationPrepared
     | TopicResumed
     | WorkFailed

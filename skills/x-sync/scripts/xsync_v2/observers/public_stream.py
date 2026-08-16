@@ -57,6 +57,7 @@ _PUBLIC_FIELD_ORDER: dict[str, tuple[str, ...]] = {
         "open_questions",
         "next_suggestion",
     ),
+    "topic_exploration_requested": (),
 }
 
 

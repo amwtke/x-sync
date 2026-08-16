@@ -32,6 +32,7 @@ from xsync_v2.domain import (
     SessionStarted,
     TopicPaused,
     TopicCompleted,
+    TopicExplorationRequested,
     TopicResumed,
     TopicSelectionSubmitted,
     TopicSwitchRequested,
@@ -359,6 +360,11 @@ class DispatchTest(unittest.TestCase):
                     trigger(TriggerKind.HELP),
                 ),
             ),
+            dialogue_event(
+                "event-8",
+                8,
+                TopicExplorationRequested(trigger()),
+            ),
         )
 
         mapped = dialogue_batch("session-1", events)
@@ -372,21 +378,23 @@ class DispatchTest(unittest.TestCase):
                 "topic_resumed",
                 "lens_changed",
                 "help_requested",
+                "topic_exploration_requested",
             ),
             tuple(item.payload.tag for item in mapped.events),
         )
         self.assertEqual(
             "true",
-            dict(mapped.events[-3].payload.fields)["requires_reground"],
+            dict(mapped.events[-4].payload.fields)["requires_reground"],
         )
         self.assertEqual(
             "technical",
-            dict(mapped.events[-2].payload.fields)["lens"],
+            dict(mapped.events[-3].payload.fields)["lens"],
         )
         self.assertEqual(
             "question-1",
-            dict(mapped.events[-1].payload.fields)["question_id"],
+            dict(mapped.events[-2].payload.fields)["question_id"],
         )
+        self.assertEqual((), mapped.events[-1].payload.fields)
 
     def test_topic_completion_maps_summary_without_internal_proof(self):
         summary = TopicSummary(

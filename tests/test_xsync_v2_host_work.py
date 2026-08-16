@@ -10,6 +10,7 @@ from xsync_v2.browser_service import (
     AnswerTopicClarificationIntent,
     BrowserCommandRequest,
     BrowserCommandService,
+    ExploreTopicsIntent,
     RequestHelpIntent,
     SelectTopicIntent,
     SetLensIntent,
@@ -449,6 +450,18 @@ class HostWorkServiceTest(unittest.TestCase):
         self.assertIs(ConversationPhase.NONE, completed.state.phase)
         self.assertIsNone(completed.state.active_topic)
         self.assertEqual(summary, completed.state.completed_topics[0].summary)
+
+        exploring = browser.execute(
+            BrowserCommandRequest(
+                "dlg-a",
+                "explore-after-completion",
+                completed.state.conversation_version,
+                ExploreTopicsIntent(),
+            )
+        )
+        self.assertIs(ConversationPhase.WAITING_HOST, exploring.state.phase)
+        candidate_work = self.current_work()
+        self.assertIs(TriggerKind.TOPIC_CANDIDATES, candidate_work.kind)
 
     def setUp(self) -> None:
         self.temporary = TemporaryDirectory()
