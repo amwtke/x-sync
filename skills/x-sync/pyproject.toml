@@ -1,0 +1,21 @@
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["B", "E", "F", "RUF", "UP"]
+
+[tool.mypy]
+python_version = "3.11"
+show_error_codes = true
+strict = true
+warn_unreachable = true
+
+[tool.coverage.run]
+branch = true
+source = ["skills/x-sync/scripts/xsync_v2"]
+
+[tool.coverage.report]
+fail_under = 90
+show_missing = true
+skip_covered = true

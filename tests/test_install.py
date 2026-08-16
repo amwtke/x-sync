@@ -56,6 +56,7 @@ class InstallerTests(unittest.TestCase):
             "codex": Path(".agents/skills/x-sync"),
             "claude": Path(".claude/skills/x-sync"),
         }
+        host_markers = {}
         for host, relative in locations.items():
             with self.subTest(host=host):
                 target = self.home / relative
@@ -64,10 +65,39 @@ class InstallerTests(unittest.TestCase):
                     (SKILL_SOURCE / "SKILL.md").read_bytes(),
                 )
                 self.assertTrue((target / "scripts" / "install.py").is_file())
+                self.assertEqual(
+                    (target / "scripts" / "xsync_v2" / "domain.py").read_bytes(),
+                    (
+                        SKILL_SOURCE / "scripts" / "xsync_v2" / "domain.py"
+                    ).read_bytes(),
+                )
                 marker = json.loads((target / MARKER).read_text(encoding="utf-8"))
                 self.assertEqual(marker["host"], host)
                 self.assertEqual(marker["scope"], "user")
                 self.assertEqual(marker["managed_by"], "x-sync-installer")
+                self.assertIn(
+                    "scripts/xsync_v2/domain.py",
+                    marker["content"]["files"],
+                )
+                self.assertFalse(
+                    any(
+                        part
+                        in {
+                            "__pycache__",
+                            ".mypy_cache",
+                            ".pytest_cache",
+                            ".ruff_cache",
+                        }
+                        or part.startswith(".coverage")
+                        for path in marker["content"]["files"]
+                        for part in Path(path).parts
+                    )
+                )
+                host_markers[host] = marker
+        self.assertEqual(
+            host_markers["codex"]["content"],
+            host_markers["claude"]["content"],
+        )
 
     def test_project_install_uses_requested_root(self):
         cases = (
@@ -94,9 +124,32 @@ class InstallerTests(unittest.TestCase):
 
     def test_installer_ignores_runtime_cache_files(self):
         ignored = self.module.ignore_source_entries(
-            str(SKILL_SOURCE), ["SKILL.md", "__pycache__", "module.pyc", ".DS_Store"]
+            str(SKILL_SOURCE),
+            [
+                "SKILL.md",
+                "__pycache__",
+                ".mypy_cache",
+                ".pytest_cache",
+                ".ruff_cache",
+                ".coverage",
+                ".coverage.worker-1",
+                "module.pyc",
+                ".DS_Store",
+            ],
         )
-        self.assertEqual({"__pycache__", "module.pyc", ".DS_Store"}, ignored)
+        self.assertEqual(
+            {
+                "__pycache__",
+                ".mypy_cache",
+                ".pytest_cache",
+                ".ruff_cache",
+                ".coverage",
+                ".coverage.worker-1",
+                "module.pyc",
+                ".DS_Store",
+            },
+            ignored,
+        )
 
     def test_unmanaged_directory_is_never_overwritten(self):
         target = self.home / ".agents" / "skills" / "x-sync"

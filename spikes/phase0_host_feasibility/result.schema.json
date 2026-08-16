@@ -1,0 +1,265 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://x-sync.local/schemas/phase0-host-feasibility-result.json",
+  "title": "Phase 0 Host Feasibility Result",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "probe_id",
+    "host",
+    "host_version",
+    "platform",
+    "public_tool_channel",
+    "agent_turn_id",
+    "supervisor_pid",
+    "channel_id",
+    "liveness_mechanism",
+    "configured_lease_seconds",
+    "target_tenure_seconds",
+    "completed_cycles",
+    "observed_pending_seconds",
+    "lease_renewals",
+    "progress_notifications",
+    "idle_model_calls",
+    "idle_model_calls_verifiable",
+    "pause_or_switch",
+    "cancellation",
+    "interruption",
+    "reconnect",
+    "spawned_new_model_process",
+    "user_input_reentered",
+    "verdict",
+    "reasons",
+    "evidence"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "probe_id": {"type": "string", "minLength": 1},
+    "host": {"enum": ["codex", "claude-code"]},
+    "host_version": {"type": "string", "minLength": 1},
+    "platform": {"type": "string", "minLength": 1},
+    "public_tool_channel": {"type": "boolean"},
+    "agent_turn_id": {"type": ["string", "null"]},
+    "supervisor_pid": {
+      "type": ["integer", "null"],
+      "minimum": 1
+    },
+    "channel_id": {"type": "string", "minLength": 1},
+    "liveness_mechanism": {
+      "enum": ["lease", "mcp_progress", "none"]
+    },
+    "configured_lease_seconds": {
+      "type": ["number", "null"],
+      "exclusiveMinimum": 0
+    },
+    "target_tenure_seconds": {"type": "number", "exclusiveMinimum": 0},
+    "completed_cycles": {"type": "integer", "minimum": 0},
+    "observed_pending_seconds": {"type": "number", "minimum": 0},
+    "lease_renewals": {
+      "type": ["integer", "null"],
+      "minimum": 0
+    },
+    "progress_notifications": {
+      "type": ["integer", "null"],
+      "minimum": 0
+    },
+    "idle_model_calls": {
+      "type": ["integer", "null"],
+      "minimum": 0
+    },
+    "idle_model_calls_verifiable": {"type": "boolean"},
+    "pause_or_switch": {"type": "boolean"},
+    "cancellation": {"type": "boolean"},
+    "interruption": {"type": "boolean"},
+    "reconnect": {"type": "boolean"},
+    "spawned_new_model_process": {"type": "boolean"},
+    "user_input_reentered": {"type": "boolean"},
+    "verdict": {"enum": ["GO", "CONDITIONAL", "NO-GO"]},
+    "reasons": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1}
+    },
+    "evidence": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1}
+    },
+    "browser_path_verified": {"type": "boolean"},
+    "visual_browser_verified": {"type": "boolean"},
+    "adaptive_followup_verified": {"type": "boolean"},
+    "trace_artifacts": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "required": ["scenario", "path", "sha256", "sanitized"],
+        "properties": {
+          "scenario": {
+            "enum": [
+              "same_turn_three_rounds",
+              "pause_or_switch",
+              "user_cancellation",
+              "tool_interruption",
+              "reconnect",
+              "idle_tenure",
+              "browser_visual"
+            ]
+          },
+          "path": {"type": "string", "minLength": 1},
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "sanitized": {"const": true}
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "verdict": {"enum": ["GO", "CONDITIONAL"]}
+        },
+        "required": ["verdict"]
+      },
+      "then": {
+        "required": [
+          "browser_path_verified",
+          "visual_browser_verified",
+          "adaptive_followup_verified",
+          "trace_artifacts"
+        ],
+        "properties": {
+          "public_tool_channel": {"const": true},
+          "agent_turn_id": {"type": "string", "minLength": 1},
+          "supervisor_pid": {"type": "integer", "minimum": 1},
+          "liveness_mechanism": {"enum": ["lease", "mcp_progress"]},
+          "configured_lease_seconds": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "target_tenure_seconds": {"const": 90},
+          "completed_cycles": {"minimum": 3},
+          "observed_pending_seconds": {"minimum": 90},
+          "lease_renewals": {"type": "integer", "minimum": 1},
+          "idle_model_calls": {"const": 0},
+          "idle_model_calls_verifiable": {"const": true},
+          "pause_or_switch": {"const": true},
+          "cancellation": {"const": true},
+          "interruption": {"const": true},
+          "spawned_new_model_process": {"const": false},
+          "user_input_reentered": {"const": false},
+          "browser_path_verified": {"const": true},
+          "visual_browser_verified": {"const": true},
+          "adaptive_followup_verified": {"const": true},
+          "reasons": {"minItems": 1},
+          "evidence": {"minItems": 1},
+          "trace_artifacts": {
+            "minItems": 7,
+            "allOf": [
+              {
+                "contains": {
+                  "properties": {
+                    "scenario": {"const": "same_turn_three_rounds"}
+                  },
+                  "required": ["scenario"]
+                }
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "scenario": {"const": "pause_or_switch"}
+                  },
+                  "required": ["scenario"]
+                }
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "scenario": {"const": "user_cancellation"}
+                  },
+                  "required": ["scenario"]
+                }
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "scenario": {"const": "tool_interruption"}
+                  },
+                  "required": ["scenario"]
+                }
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "scenario": {"const": "reconnect"}
+                  },
+                  "required": ["scenario"]
+                }
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "scenario": {"const": "idle_tenure"}
+                  },
+                  "required": ["scenario"]
+                }
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "scenario": {"const": "browser_visual"}
+                  },
+                  "required": ["scenario"]
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"verdict": {"const": "GO"}},
+        "required": ["verdict"]
+      },
+      "then": {
+        "properties": {"reconnect": {"const": true}}
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "verdict": {"enum": ["GO", "CONDITIONAL"]},
+          "liveness_mechanism": {"const": "mcp_progress"}
+        },
+        "required": ["verdict", "liveness_mechanism"]
+      },
+      "then": {
+        "properties": {
+          "progress_notifications": {"type": "integer", "minimum": 2}
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "verdict": {"enum": ["GO", "CONDITIONAL"]},
+          "liveness_mechanism": {"const": "lease"}
+        },
+        "required": ["verdict", "liveness_mechanism"]
+      },
+      "then": {
+        "properties": {
+          "configured_lease_seconds": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "lease_renewals": {"type": "integer", "minimum": 1}
+        }
+      }
+    }
+  ],
+  "additionalProperties": false
+}

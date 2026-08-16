@@ -1,0 +1,80 @@
+{
+  "command_sha256": "26598b4dc50df3323465cc72affc7e02c3456314dcc07d0ba73b3be8188a137a",
+  "event_count": 10,
+  "kind": "x-sync-phase0-codex-sanitized-trace",
+  "schema_version": 1,
+  "thread_id": "01a00881-8c23-7412-bbe8-d8b06d2ba895",
+  "timeline": [
+    {
+      "position": 0,
+      "thread_id": "01a00881-8c23-7412-bbe8-d8b06d2ba895",
+      "type": "thread.started"
+    },
+    {
+      "position": 1,
+      "type": "turn.started"
+    },
+    {
+      "item_id": "item_0",
+      "position": 2,
+      "question_chars": 62,
+      "question_sha256": "bb8d9a3d34a7ee8af1f2044f89250910eabc02585b86c0f91a44c5afb98d43e5",
+      "round": 1,
+      "type": "item.started"
+    },
+    {
+      "answer_sha256": "731fd98a88953701621b0b759629846290d5efc62d209fc5a1e3fd86b858aaba",
+      "item_id": "item_0",
+      "position": 3,
+      "question_chars": 62,
+      "question_sha256": "bb8d9a3d34a7ee8af1f2044f89250910eabc02585b86c0f91a44c5afb98d43e5",
+      "round": 1,
+      "type": "item.completed"
+    },
+    {
+      "item_id": "item_1",
+      "position": 4,
+      "question_chars": 208,
+      "question_sha256": "a8676e92003a881c70d75e0971bba9b81a0aa806c8c38ed751fde9494b7ec276",
+      "round": 2,
+      "type": "item.started"
+    },
+    {
+      "answer_sha256": "e73ecda093e8c84d8717914595e17e9d68593db1f993dd79f42820613387f4eb",
+      "item_id": "item_1",
+      "position": 5,
+      "question_chars": 208,
+      "question_sha256": "a8676e92003a881c70d75e0971bba9b81a0aa806c8c38ed751fde9494b7ec276",
+      "round": 2,
+      "type": "item.completed"
+    },
+    {
+      "item_id": "item_2",
+      "position": 6,
+      "question_chars": 188,
+      "question_sha256": "abfebcf7384b80ff51663bc39ff3da44bb0572b1ba550fa0f2f1f17decb01fa5",
+      "round": 3,
+      "type": "item.started"
+    },
+    {
+      "answer_sha256": "bbdfbb33bd5420ff7f3b914104dc2fe6287619530c7442419990ff62c3bad76d",
+      "item_id": "item_2",
+      "position": 7,
+      "question_chars": 188,
+      "question_sha256": "abfebcf7384b80ff51663bc39ff3da44bb0572b1ba550fa0f2f1f17decb01fa5",
+      "round": 3,
+      "type": "item.completed"
+    },
+    {
+      "item_type": "agent_message",
+      "position": 8,
+      "text_chars": 45,
+      "text_sha256": "92d46ec69f78f201e74293f6cec4de6469c78fa1a56f5279f49e0dc8e4a0a694",
+      "type": "item.completed"
+    },
+    {
+      "position": 9,
+      "type": "turn.completed"
+    }
+  ]
+}

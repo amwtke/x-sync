@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "probe_id": "codex-mcp-20260816",
+  "host": "codex",
+  "host_version": "codex-cli 0.147.0",
+  "platform": "darwin-arm64",
+  "public_tool_channel": true,
+  "agent_turn_id": null,
+  "supervisor_pid": 12063,
+  "channel_id": "stdio-mcp:xsync_spike",
+  "liveness_mechanism": "mcp_progress",
+  "configured_lease_seconds": null,
+  "target_tenure_seconds": 30,
+  "completed_cycles": 3,
+  "observed_pending_seconds": 38.237,
+  "lease_renewals": null,
+  "progress_notifications": null,
+  "idle_model_calls": null,
+  "idle_model_calls_verifiable": false,
+  "pause_or_switch": true,
+  "cancellation": false,
+  "interruption": true,
+  "reconnect": false,
+  "spawned_new_model_process": false,
+  "user_input_reentered": false,
+  "browser_path_verified": false,
+  "visual_browser_verified": false,
+  "adaptive_followup_verified": false,
+  "verdict": "NO-GO",
+  "reasons": [
+    "A strengthened run with retained sanitized ordering evidence proved three sequential MCP calls in one unfinished Codex turn.",
+    "A switch command cancelled the pending question and rejected the tool result.",
+    "Terminating the MCP process closed the transport and the same turn did not reconnect."
+  ],
+  "evidence": [
+    "Sanitized trace: one thread.started, one turn.started, three paired non-overlapping MCP calls, one final Agent message, and one turn.completed.",
+    "Successful thread id: 01a00881-8c23-7412-bbe8-d8b06d2ba895.",
+    "Legacy observation: round 2 remained pending for 38.237 seconds with a configured 10-second progress interval.",
+    "Legacy switch observation returned MCP error -32001 and persisted the question as cancelled.",
+    "Legacy interruption observation returned Transport closed and spawned no replacement MCP process."
+  ],
+  "trace_artifacts": [
+    {
+      "scenario": "same_turn_three_rounds",
+      "path": "spikes/phase0_host_feasibility/results/codex-0.147.0-20260816.trace.json",
+      "sha256": "213cc028d3aa3611b53cd4fb3dbb79be756a93fb358fc0eec3d9ab78b48888d0",
+      "sanitized": true
+    }
+  ]
+}

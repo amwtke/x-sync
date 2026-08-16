@@ -1,6 +1,6 @@
 # X-Sync v2：温暖、话题驱动的连续苏格拉底对话
 
-状态：设计已确认，尚未开始实现
+状态：设计已确认，v2 状态机/Observer 内核第一切片已实现；耐久事件存储与 registry fencing 待实现
 
 日期：2026-08-15
 
@@ -29,7 +29,9 @@ v2 将默认体验从“回答五道题”改成“围绕一个话题逐步聊�
 | 暂停 | 保存阶段成果，不视为完成或掌握 |
 | 切换 | 暂停当前 Topic Run，给出仓库绑定的新候选，再继续同一网页 Session |
 | 导出 | 随时生成固定 JSON + Markdown 快照，不复制完整聊天记录 |
-| Host 交互 | 目标架构是浏览器写耐久事件、模型外 Host Adapter 阻塞等待；必须先通过两宿主 Phase 0 spike 才能宣称可自动唤醒 |
+| Host 交互 | 目标架构是浏览器写耐久事件、模型外 Host Adapter 阻塞等待；Codex 与 Claude Code 均已确认具备所需宿主能力，Claude Code 因本机无法登录而豁免真机运行验证 |
+| 通道断开 | 不依赖 stdio MCP 在同一 Agent turn 内透明重连；用户输入先耐久化，页面显示等待重连，并在新 Agent turn 中继续 |
+| 双宿主验收 | Codex 为 `CAPABILITY_VERIFIED + RUNTIME_PARTIALLY_VERIFIED`；Claude Code 为 `CAPABILITY_VERIFIED + LOCAL_RUNTIME_WAIVED`；两端共用同一 Runtime Core |
 | token 策略 | 空闲协议不发起模型调用；每轮 X-Sync 增量 context capsule 有硬上限，宿主自身上下文不在该上限内 |
 | 三方同步 | 只输出当前话题/任务的多维 readiness profile，不生成全仓库或员工单分 |
 | 兼容 | v1 `sessions/`、API、事件和报告不迁移；v2 使用独立 `dialogues/` 与 `/api/v2` |
@@ -301,22 +303,169 @@ Host CLI 通过 session-private 本地 IPC 连接 Runtime daemon。Unix 使用�
 
 ### 6.2 真正唤醒的可行性边界
 
-Skill 文本本身不能唤醒已经结束的 Codex/Claude 任务。下面的 Host 交互是 Phase 0 待验证的条件能力，而不是既成事实。若不启动新的模型进程，连续网页体验必须同时满足：
+Skill 文本本身不能唤醒已经结束的 Codex/Claude 任务。当宿主允许一个尚未 final 的 Agent turn 保持 pending tool channel 时，连续网页体验可以同时满足：
 
 - 同一个尚未 final 的 Agent turn 持有平台公开支持的 pending tool channel；
 - 该 channel 连接一个模型外长期存活的 Host Adapter Supervisor，Supervisor 阻塞等待、持有 lease，并在 work 到达时把结果返回到这个 Agent turn。
 
 协议层的目标是用户空闲时不主动发起模型调用；宿主可能注入的上下文、内部调度与总 token 只能观测，不能由 X-Sync 单方面保证。空闲期间仍会有本地等待进程、HTTP keepalive 或文件系统事件。
 
-实现前必须先通过两个 Phase 0 真机 spike。两项都必须使用同一个尚未发送 final response 的 Agent turn、受支持的公开工具通道，并测量平台允许的最大 pending 时长、用户取消、工具中断和重新连接行为：
+双宿主的必须验收门槛是 capability compatibility：官方公开能力必须支持 Skill 发现、stdio MCP/等价工具通道、流式非交互调用和长时工具运行，且两个 adapter 必须通过同一本地协议 harness。当机器具备账号与凭据时，再执行下列真机 observational matrix；本机无法登录 Claude Code，所以 Claude Code 真机运行按明确的 `LOCAL_RUNTIME_WAIVED` 记录，不阻塞共享内核实现：
 
 1. Codex：同一个未 final turn 内连续完成至少三个 browser → Host → browser 回合；
 2. Claude Code：同一个未 final turn 内用同一协议连续完成至少三个回合；
-3. 两者都必须包含一次空闲跨过 lease renewal，再执行一次 pause 或 switch，并覆盖 tool channel 取消与重新连接。
+3. 观测空闲跨过 lease renewal、pause/switch、tool channel 取消与重新连接，但不把 stdio 透明重连当作产品正确性前提。
 
-如果某宿主只能启动新的 Codex/Claude 进程来处理 work，那是另一种架构，会引入新的凭据、权限、上下文和 token 成本，不能描述为“唤醒当前任务”，也不能在 v2 MVP 中悄悄替代 Phase 0 条件。
+如果某宿主只能在新的 Codex/Claude turn 中处理 work，必须诚实标记为重连后恢复，不能描述为“唤醒当前任务”。它只消费新 turn 实际需要的模型 token，空闲协议本身不主动轮询模型。
 
 如果 Host 已结束或 Adapter 断开，网页显示“回答已经保存，等待搭档重新连接”，不能无限 spinner，也不能要求用户重新输入。Host 重连后从未确认 work 继续。
+
+### 6.3 状态机模式是领域内核
+
+v2 的会话、Topic Run、Work 和 evidence health 必须以显式状态机实现，不能把状态散落成一组互相独立的布尔字段，也不能在 HTTP handler、Host Adapter、Observer 或页面代码里复制迁移规则。
+
+每次语义写入都遵循同一个函数形状：
+
+```text
+decide(current_state, typed_command, immutable_context)
+  -> rejected(stable_error)
+  | accepted(domain_events)
+
+reduce(current_state, domain_event)
+  -> next_state
+
+plan_effects(prepared_event_batch)
+  -> durable_effect_intents
+```
+
+- `decide` 只做 guard、选择迁移和产生领域事件；它不读写文件、不取当前时间、不生成随机数。时间、id、evidence snapshot 和 registry generation 由调用方作为不可变输入注入。
+- `reduce` 是唯一能从事件得到 canonical state 的函数。正常提交和故障重放必须调用同一 reducer，不能维护第二套“恢复专用”逻辑。
+- 允许的 `(state, command) -> transition` 用显式 transition table 或按状态分组的 typed handler 注册；未知组合一律返回稳定的 `TOPIC_STATE_CONFLICT`，不能落入宽松的默认分支。
+- guard 只依赖当前 state、command 和冻结上下文；action 只返回领域事件。任何 I/O 都在状态机之外完成，并在 commit 前重新校验其 digest、version 和 registry generation。
+- 需要后置副作用的命令由独立纯函数 `plan_effects` 根据已分配 event id 但尚未提交的 prepared batch 产生 typed durable intent。这使 intent id 可稳定绑定 originating event，同时不让 reducer 或 Observer 承担副作用规则。第一个纯内核切片只覆盖不产生外部副作用的状态迁移，因此暂不声明空的 effect 占位类型。
+- `lifecycle`、`phase`、`evidence_health` 和 Work state 是正交但有交叉不变量的有限状态；状态机在每次迁移后统一验证这些不变量。
+
+Effect intent 不是只存在进程内的返回值。每个 intent 都使用由 `originating_event_id + effect_kind + canonical_payload_digest` 派生的稳定 `intent_id`，并与产生它的 event batch 和 transaction commit marker 原子持久化。未完成 intent 是“已提交 intent 减去已提交 completion receipt/event”的可重放视图，不依赖一次性内存队列。`plan_effects` 与 event 一起在 transaction marker 的线性化点前执行；Effect Executor 以 `intent_id` 幂等 claim，执行可恢复的副作用，再用稳定 `command_id/causation_id` 提交 typed completion command；重启后从 durable log 补扫未完成 intent。若崩溃发生在文件副作用完成、completion command 落盘之前，Executor 必须依靠稳定 artifact id、commit marker 和 content hash 识别已完成结果，不得重复产生新导出物。
+
+主对话状态机如下。`ActiveTopic` 是复合状态；从它发出的 `pause`、`switch` 和完成迁移对其中任意子状态都有效：
+
+```mermaid
+stateDiagram-v2
+    [*] --> NotStarted
+    NotStarted --> SessionSetup: session_started
+
+    state SessionSetup {
+        [*] --> SetupWaitingHost
+        SetupWaitingHost --> ChoosingTopic: topic_candidates_presented
+        ChoosingTopic --> SetupWaitingHost: custom_topic_submitted
+        SetupWaitingHost --> ClarifyingTopic: topic_clarification_requested
+        ClarifyingTopic --> SetupWaitingHost: topic_clarification_answered
+        SetupWaitingHost --> SetupRecoverableError: work_dead_lettered
+        SetupRecoverableError --> SetupWaitingHost: retry with new trigger
+    }
+
+    state ActiveTopic {
+        [*] --> TopicWaitingHost
+        TopicWaitingHost --> AwaitingUser: agent_turn_committed [gates still open]
+        AwaitingUser --> TopicWaitingHost: learner_turn_submitted
+        TopicWaitingHost --> TopicWaitingHost: work_requeued or reground
+        TopicWaitingHost --> TopicRecoverableError: work_dead_lettered
+        TopicRecoverableError --> TopicWaitingHost: retry with new trigger
+    }
+
+    SessionSetup --> ActiveTopic: topic_started / queue initial_turn
+    SessionSetup --> SessionSetup: switch / replace setup work
+    ActiveTopic --> Paused: pause / supersede in-flight work
+    ActiveTopic --> SessionSetup: switch / pause old topic + queue candidates
+    ActiveTopic --> TopicCompleted: completion guard passes
+    Paused --> TopicWaitingHost: resume [saved turn, unresolved trigger, or reground]
+    Paused --> AwaitingUser: resume [open question still current]
+    Paused --> SessionSetup: switch topic
+    TopicCompleted --> SessionSetup: explore another topic
+    TopicCompleted --> SessionEnded: end session
+    Paused --> SessionEnded: end session
+    SessionSetup --> SessionEnded: end session
+    SessionEnded --> SessionEnded: version-neutral export or audit
+    SessionEnded --> [*]
+```
+
+自然完成不是某个 turn 数触发，而是一个明确 guard：
+
+```text
+mechanism == supported
+and boundary == supported
+and repository_application == supported
+and business_technical_mapping == confirmed
+and evidence_health in {current, captured_dirty_after_exact_recheck}
+```
+
+`captured_dirty_after_exact_recheck` 是完成判断时的内部 guard 结果，不新增持久化 evidence enum；持久化仍使用第 7 节定义的 `captured_dirty`，并记录精确复验 fingerprint。
+
+Work 与 evidence health 使用各自的小状态机，避免把租约失败或证据变化误装成对话回答：
+
+```mermaid
+stateDiagram-v2
+    [*] --> Queued
+    Queued --> Completed: valid publish [lease overlay current]
+    Queued --> Superseded: pause, switch, lens, or evidence change
+    Queued --> Failed: bounded processing failure
+    Failed --> Queued: durable requeue [attempt below limit]
+    Failed --> DeadLetter: retry limit reached
+    Completed --> [*]
+    Superseded --> [*]
+    DeadLetter --> [*]
+```
+
+```mermaid
+stateDiagram-v2
+    state HealthCheck <<choice>>
+    [*] --> HealthCheck
+    Current --> HealthCheck: revalidate
+    CapturedDirty --> HealthCheck: revalidate
+    Stale --> HealthCheck: revalidate
+    Disputed --> HealthCheck: revalidate
+    Unavailable --> HealthCheck: revalidate
+    HealthCheck --> Unavailable: safe read failed
+    HealthCheck --> Disputed: readable + authoritative conflict
+    HealthCheck --> Stale: readable + no conflict + fingerprint mismatch
+    HealthCheck --> CapturedDirty: exact fingerprint + focused tree dirty
+    HealthCheck --> Current: exact fingerprint + focused tree clean
+```
+
+上图的 choice guard 按列出的判定条件互斥，而不是优先级相同的模糊标签：先判断能否安全读取，再判断权威冲突，再比较 cited fingerprint，最后才按 focused tree clean/dirty 分流。相同冻结输入只能得到一个 evidence-health next state。
+
+### 6.4 观察者模式只传播已提交事实
+
+状态机完成 transaction、领域事件已经 `fsync + atomic rename`、canonical reducer 已得到可重放 state 之后，Runtime 才向 Observer Hub 发布不可变的 `CommittedEvent`。Observer 不能参与 guard，不能改 canonical state，不能持有可变 state 引用，也不能让领域提交依赖某个 Observer 是否在线。
+
+```mermaid
+flowchart LR
+    C[Typed command] --> M[State machine decide]
+    M --> T[Writer transaction]
+    T --> E[(Append-only event store)]
+    E --> R[Canonical reducer]
+    R --> S[(Materialized state)]
+    S -->|after commit and unlock| O[Observer Hub]
+    O --> B[Browser stream observer]
+    O --> H[Host wake observer]
+    O --> I[Topic-index projector]
+    O --> G[Registry-view projector]
+    O --> A[Audit and metrics observer]
+```
+
+Observer 契约：
+
+- 只接收 `stream_kind + stream_id + sequence + event_id + immutable payload view`；Dialogue stream 另带 `session_id`，Registry stream 不伪造 session id。Observer 必须声明可接受的 `stream_kind`，Dialogue Observer 永远不会收到 Registry event，反之亦然。同一 event stream 按 sequence 有序，跨 Session 或 registry stream 不承诺全局顺序。跨 stream 投影保存 `{stream_id: last_sequence}` vector cursor，不能用单个全局 watermark 猜顺序。
+- 交付语义是 at-least-once。持久化 Observer 用 `event_id` 和 per-stream cursor 幂等；临时 Observer（SSE、进程内 wakeup）允许断开后从 event cursor 恢复。发现 sequence gap 时停止消费并从 durable log/state resync，不能跳过或自行重排。
+- 一个 Observer 失败不能回滚已经提交的领域事件，也不能阻塞其他 Observer。持久化投影失败时记录 lag/error，随后从事件链 catch up；SSE 慢消费者使用有界队列，超出游标保留窗口后返回 `CURSOR_EXPIRED` 并重新读取 state。
+- Observer dispatch 必须发生在 session writer 与 registry lock 全部释放之后。callback 内禁止同步调用 `decide`、禁止递归 publish、禁止执行模型推理或长时间 I/O；dispatcher 设置 reentrancy guard，新到 event 只能进入 FIFO 队尾。Host wake Observer 只唤醒已经耐久化的 work；模型处理发生在 Supervisor/Host 边界之外。
+- 需要持久化投影的 Observer callback 只向自己的有界、可 coalesce worker lane 提交 `stream_id + through_sequence` 通知，不在 dispatch 线程直接写盘。worker 从 durable log 补读事件，在独立 derived-view lock 下原子更新 projection 与 cursor；慢速/失败 worker 不阻塞其他 Observer 或 command response。这类 worker 只能重建可删除投影，不是 Effect Executor，不得提交领域 command。
+- Observer 之间不能依赖注册顺序、互相调用或等待。每个 Observer 只获得 read-only DTO 和自己的 projection/notification port；不向它注入 EventWriter、SessionStore mutation API、CommandBus 或 Runtime Core。
+- 如果后置 workflow 必须产生新的领域变化（例如 export worker 完成两份文件后提交 `export_completed`），由 Observer Hub 之外的 Effect Executor 消费与 event batch 原子落盘的 durable effect intent；它在原 transaction 与 observer dispatch 都结束后，使用稳定 `intent_id/command_id/causation_id` 向 command inbox 排队 typed command。普通 effect-generated semantic command 重新经过完整状态机、conversation CAS、current registry generation 和幂等校验；下一条所述的 `IntentCompletionCommand` 是唯一 authority-scoped 例外，只做 intent/receipt/artifact/session 校验与 version-neutral append。Observer callback 本身永远不持有 CommandBus。Executor 的 claim/cursor/retry 与 completion receipt 都必须可从 durable log 恢复。
+- Effect completion 使用受限的 `IntentCompletionAuthority`，不冒充 Browser/Host 语义 command。它先按 `intent_id` 查 durable receipt，再校验原始 intent、`as_of_event_sequence`、artifact path/hash/size 和 Session 归属；不要求原始 conversation version 或 registry generation 仍是当前值。因此正常对话并发、deactivation 或 Session end 不会让已落盘 intent 永久卡住。completion event 在提交时使用当前 `from_version == to_version`，允许追加到 deactivating/deactivated/ended Session，但绝不得改变 Topic、gate、learner model 或 current pointer。
+- `state.json` 的 canonical reducer 不是 Observer；它与 event commit 属于领域 transaction。`topic-index.json`、`active.json`、Browser stream、Host wake 和 telemetry 才是可删除、可重放或可丢弃的 Observer 输出。
+
+首版只注册上述五类 Observer，不提供任意插件执行仓库命令的通用 hook。增加 Observer 必须声明输入事件、输出边界、cursor、失败策略和重放测试。
 
 ## 7. 持久化模型
 
@@ -334,14 +483,18 @@ Skill 文本本身不能唤醒已经结束的 Codex/Claude 任务。下面的 Ho
       active.json                     # 从 registry 重建的指针
       registry/
         events/
-          <generation>-<event-id>.json
+          <registry-sequence>-<event-id>.json
+        transactions/
+          <first>-<last>-<transaction-id>.json  # registry commit marker
         state.json                    # 可重建 registry 投影
       <session-id>/
         config.json                   # 创建后不可变
         evidence/
           <evidence-snapshot-id>.json
         events/
-          <sequence>-<event-id>.json  # 唯一事实来源
+          <sequence>-<event-id>.json
+        transactions/
+          <first>-<last>-<transaction-id>.json  # event hashes + durable effect intents
         state.json                    # 可重建投影
         runtime/
           leases/                     # 临时协调状态，不可移植
@@ -354,7 +507,7 @@ Skill 文本本身不能唤醒已经结束的 Codex/Claude 任务。下面的 Ho
 
 v2 使用独立 `schema_version: 2` 和 `protocol_version: "x-sync-dialogue/2"`。现有 repository scan 和 focused evidence 保留自己的 v1 schema，通过明确引用接入 v2。
 
-事件和证据快照不可变。`state.json`、`active.json`、`topic-index.json`、`latest.json` 和 leases 都是可重建或临时视图，不是事实来源。
+事件、transaction commit marker 和证据快照不可变。事件只有在同 stream 的 marker 列出其 sequence、event id 和 hash 后才是已提交事实；marker 是所有 event 文件与 durable effect intent 落盘后的单一线性化点。未被 marker 引用的 event 或临时文件在恢复时隔离，不进入 reducer。`state.json`、`active.json`、`topic-index.json`、`latest.json` 和 leases 都是可重建或临时视图，不是事实来源。
 
 共享的 v1 focused evidence 不能直接视为不可变历史事实：现有 evidence id 没有覆盖所有 claim metadata。Topic Run 开始时，v2 必须把完整 canonical v1 record、原始 content hash 和 `imported_from` 一起冻结到该 Dialogue Session 的 `evidence/`，并用完整 canonical snapshot 计算新的 snapshot id。后续只引用该 v2 snapshot，不信任共享 v1 文件的可变 metadata。
 
@@ -374,11 +527,13 @@ v2 不复用 v1 `Store.mutate`、每事件嵌入完整 `state_after` 或每次�
 
 如果进程在 started 与 committed 之间崩溃，registry replay 会保持 A fenced，并由 recovery coordinator 继续完成同一个 generation 的 quiesce/activate，不能临时恢复 A 写权限。旧页面收到稳定 `SESSION_DEACTIVATED`，以及当前 Session 的重新连接入口。
 
+Session end 复用同一套可恢复 fence，不能分别“顺手”写 Dialogue 和 Registry 两个 stream。Coordinator 先在 exclusive registry lock 下追加 `dialogue_deactivation_started(target_session_id=null, reason=session_end)` 并推进 fence generation；再按上述规则 quiesce A，在 Dialogue stream 追加 `session_ended`；最后用该 Dialogue event 的 sequence/hash/state digest 作 proof，向 Registry stream 追加 `dialogue_ended` 并清空 current pointer。任一步崩溃后，registry replay 都保持旧 Session fenced，recovery coordinator 以同一 generation 幂等续完。Dialogue `session_ended` 已落盘、Registry `dialogue_ended` 尚未落盘的短暂窗口可显示为 `current-but-deactivating`，但它已被 fence，不得接受语义写入，Runtime 必须在开放 command 前先续完 recovery。不得在 Dialogue 尚未 ended 时独自清空 registry。
+
 锁顺序固定为 `registry → session writer`。所有 semantic Browser command、Host claim 和 publish 在最终分配 claim/sequence 或 rename event 前，必须持有 registry shared/read lock（不支持 shared lock 的平台使用同一 exclusive lock），在锁内复验 current Session + generation，并保持该锁直到 session event/claim durable 后才释放。handoff 从 `deactivation_started` 到 activate B 全程持有 exclusive registry lock；崩溃释放 OS lock，但 durable started 仍保持 fence，恢复者重新获得 exclusive lock 后续完。这样“命令先检查、fence 后才 append”的 TOCTOU 不存在。
 
 已经结束的 Session 不再追加会改变对话语义的 turn/topic 事件。结束后仍允许追加 version-neutral 的 export/audit 事件，使用户可以从历史页面再次导出；这些事件不能改变 gate、learner model 或结束时的对话状态。
 
-Session resolve/create/deactivate/end 和 `dialogues/active.json` 更新必须使用 project+learner registry lock、registry generation 与 CAS；每次 `dialogue_created | dialogue_deactivation_started | dialogue_deactivated | dialogue_activated | dialogue_ended` 都写入 append-only registry event。`active.json` 由最大有效 generation 重建，而不是从各 Session 时间戳猜测。session 内事件仍由 per-session daemon 串行写入。两个并发裸启动只能复用同一个 resolved Session 或明确返回冲突，不能各自创建 active orphan。
+Session resolve/create/deactivate/end 的 registry event commit 必须使用 project+learner registry lock、registry generation 与 CAS；每次 `dialogue_created | dialogue_deactivation_started | dialogue_deactivated | dialogue_activated | dialogue_ended` 都写入 append-only registry event。`active.json` 只是 Registry-view Observer 在所有 domain lock 释放后更新的 derived projection：Observer 使用独立 derived-view lock 和 cursor CAS，可由最大有效 generation 重建，而不是从各 Session 时间戳猜测。session 内事件仍由 per-session daemon 串行写入。两个并发裸启动只能复用同一个 resolved Session 或明确返回冲突，不能各自创建 active orphan。
 
 每个 Topic Run 独立保存：
 
@@ -388,15 +543,19 @@ Session resolve/create/deactivate/end 和 `dialogues/active.json` 更新必须�
 - gate assessment；
 - evidence health；
 - hint dependency；
+- pause/resume context：使用显式 tagged union `open_question | unreviewed_turn | unresolved_trigger | recoverable_error`，各分支分别保存问题/turn、trigger kind/digest，或 recoverable error 与允许的 recovery actions；一次暂停恰好命中一个分支；
 - lifecycle 与阶段总结。
 
-生命周期和处理阶段正交：
+处理阶段属于 Dialogue Session aggregate，因为候选和澄清发生在 Topic Run 存在之前；Topic Run 不另存一份可与 Session 分叉的 phase。候选项不是 `proposed` Topic Run，话题切换后的旧 work 使用 `superseded`，而 Topic Run 本身使用 `paused`。规范词表为：
 
 ```text
-lifecycle: proposed | active | paused | completed | superseded
-phase: choosing_topic | clarifying_topic | awaiting_user | waiting_host | host_thinking | summarizing | recoverable_error | none
+session_lifecycle: new | open | ended
+topic_lifecycle: active | paused | completed
+session_phase: choosing_topic | clarifying_topic | awaiting_user | waiting_host | recoverable_error | none
 evidence_health: current | captured_dirty | stale | disputed | unavailable
 ```
+
+`host_thinking`、`leased` 和 `summarizing` 只属于当前 `runtime_epoch` 下的 coordination/view overlay：分别由有效 lease 和 `work.kind=topic_summary` 派生，不写入 canonical dialogue phase。Runtime 重启后 overlay 消失，未完成 durable work 仍归约为 `queued + waiting_host`，不需要伪造对话事件。
 
 任一 Conversation Session 最多一个 active Topic Run，任一 Topic Run 最多一个 pending learner turn 和一个 runnable work；处于候选/澄清阶段的 Session 最多一个 session-level custom-topic turn 和一个 candidate/clarification work。
 
@@ -412,7 +571,7 @@ evidence_health: current | captured_dirty | stale | disputed | unavailable
 - delayed retrieval 记录与 `due_at`；
 - 与当前任务的相关性。
 
-多个 Session daemon 可能同时结束或暂停话题。它们不能直接用“最后写入者获胜”覆盖 topic index：更新必须在 project-level derived-view lock 下按 event watermark 做 CAS/retry；发现 watermark 缺口时删除并从 Dialogue event 重建。
+多个 Session daemon 可能同时结束或暂停话题。它们不能直接用“最后写入者获胜”覆盖 topic index：更新必须在 project-level derived-view lock 下按 per-stream vector cursor 做 CAS/retry；发现任一 stream sequence 缺口时删除并从 Dialogue event 重建。Registry event 另有独立、严格递增的 `registry_sequence`；`generation` 只做 fencing，不能兼任同一 generation 内事件的排序键。
 
 同一 session 内的重复成功不能冒充保持。只有延迟、尽量无提示的重新表达才能提高 retention；复习节奏复用现有约 1、3、7、14、30 天的原则，并由实际表现调整。
 
@@ -449,6 +608,8 @@ Runtime 是唯一事件写入者。写命令统一携带：
 - `parent_turn_id`（适用时）
 - canonical payload hash
 
+`IntentCompletionCommand` 是唯一不携带 `expected_conversation_version` 的写命令；它携带 `intent_id + as_of_event_sequence + artifact_digest`，只能产生 version-neutral completion event/receipt。其他写命令仍必须按上述字段做 CAS。
+
 所有会改变对话语义的 Browser command、Host claim 和 publish 还必须绑定并校验 project+learner registry generation；处于 `deactivating`、非当前或 generation 过期的 Session 只能 read/export/audit，其他操作返回 `SESSION_DEACTIVATED`。
 
 处理顺序：
@@ -456,8 +617,8 @@ Runtime 是唯一事件写入者。写命令统一携带：
 1. 先查 `command_id`；相同 key + 相同 body 返回第一次结果；
 2. 相同 key + 不同 body 拒绝为 `IDEMPOTENCY_CONFLICT`；
 3. 再检查 conversation version 和 parent turn；
-4. 在 per-session writer transaction 中用 O(1) cursor 分配 sequence，写临时文件、`fsync`、atomic rename；project-level lock 只用于 session registry、active pointer 和 topic index；
-5. 事件落盘后归约 `state.json`；
+4. 在 per-session writer transaction 中用 O(1) cursor 分配 sequence，先写全部 event 文件并 `fsync`，再原子 rename 包含 event hashes 与 durable effect intents 的 transaction commit marker；marker 是提交线性化点。project+learner registry lock 只保护 registry 事实与 fencing；`active.json`/topic-index/cursor 等投影在 domain unlock 后使用独立 derived-view lock；
+5. marker 落盘后用同一 reducer 归约并原子更新 `state.json`；
 6. 最后才向网页确认“已保存”。
 
 `event_sequence` 对每个 durable event 单调递增。`conversation_version` 只在浏览器可见的语义状态变化时递增；纯协调或版本中立事件使用 `from_version == to_version`。lease 只推进自己的 `lease_version`。
@@ -471,8 +632,6 @@ Runtime 是唯一事件写入者。写命令统一携带：
 - `custom_topic_submitted`
 - `topic_clarification_requested`
 - `topic_clarification_answered`
-- `topic_clarified`
-- `topic_selected`
 - `topic_started`
 - `lens_changed`
 - `learner_turn_submitted`
@@ -503,10 +662,12 @@ Runtime 是唯一事件写入者。写命令统一携带：
 ### 8.3 Work 与 lease
 
 ```text
-work: queued → leased → completed
-      queued|leased → superseded
-      queued|leased → failed → queued   # 有上限的可恢复重排
-      failed → dead_letter               # 超过上限，等待用户动作
+durable work: queued → completed
+              queued → superseded
+              queued → failed → queued   # 有上限的可恢复重排
+              failed → dead_letter       # 超过上限，等待用户动作
+
+lease overlay: unclaimed ↔ leased        # 临时协调状态，不进入对话事件流
 ```
 
 每个 work 明确包含 `kind`、`trigger_event_id`、`input_digest` 和 `evidence_digest`。`work_id` 由 session id、kind、trigger event sequence/id、Topic Contract digest（若有）、input digest 和 evidence digest 规范化派生，不依赖显示文本，也不假设一定存在 learner turn。input digest 覆盖当前 lens、相关 gate/model 状态和触发 payload。
@@ -551,6 +712,56 @@ Runtime daemon 每次启动产生新的 `runtime_epoch`。lease/claim 必须绑�
 
 按钮是确定控制面。Runtime 也可以在创建普通 learner turn 之前识别一组经过测试、整句精确匹配的控制 utterance，例如修剪后的 `停止`、`先停一下`、`换个话题`、`切换话题`；只有整段输入完全匹配时才转换为 control command。包含更多语义或可能含否定的句子交给 Host 澄清，避免把“这里不能停”误判成暂停。
 
+### 8.5 状态不变量与关键迁移表
+
+Canonical state 在每次 `reduce` 后必须同时满足：
+
+1. 每个 `(repo, learner)` 至多一个 registry-current Session；外部 Browser/Host semantic command、claim 和 publish 只有 current、非 deactivating Session 才能接受。匹配 fence generation 的内部 `FencedQuiesceAuthority` 是唯一例外，并且只允许提交 handoff/session-end 所需的 `topic_paused | session_deactivation_prepared | session_ended`，不能借此恢复普通对话写权限。
+   `session_lifecycle=new` 只允许 `session_started`，`open` 才能进入话题对话，`ended` 只允许 version-neutral export/audit/effect completion；`phase=none` 不得代替 lifecycle 区分未开始、话题暂停/完成和会话已结束。
+2. 每个 Session 至多一个 active Topic Run；每个 Topic Run 至多一个 pending learner turn 和一个 runnable durable work；候选/澄清阶段至多一个 session-level pending turn 和一个 runnable work。
+3. `awaiting_user` 必须有且仅有一个可见、尚未回答的 Agent question，且没有 runnable work。
+4. `waiting_host` 必须有且仅有一个未解决 trigger，且最多一个 queued/有效租约覆盖的 logical work。
+5. `paused | completed` Topic Run 不得拥有可发布 work；`completed` 不得包含下一问。
+6. `recoverable_error` 不得继续自动 retry；只有显式恢复 command 能创建新的 trigger/work。
+7. 新提交的 `supported` gate、`confirmed` insight 和 `topic_completed` 必须通过当时 evidence guard，并在 completion event 中保留 `as_of_sequence + evidence_fingerprint`。后续 freshness 恶化不改写“当时已完成”的 lifecycle，而是把 current readiness/gate/insight 投影降为 stale/disputed/unavailable；这些当前状态不能再作为 confirmed 输出或新完成的证据。
+8. work input digest 覆盖 current lens、相关 gate/model 和 trigger payload；publish 同时匹配 registry generation、runtime epoch、work、parent turn、Topic Contract/input/evidence digest。
+9. `event_sequence` 在各自 stream 严格递增；一次 semantic command 至多推进一次 `conversation_version`，version-neutral event 使用 `from_version == to_version`。
+10. 一个 learner turn 至多产生一个可见的下一问；retry、replay、Observer 重投递和迟到 Host result 都不能突破该约束。
+
+关键迁移的 guard 与原子结果如下；表中复合动作由单个 composite committed event 完成，Observer 不负责“补齐下一步”：
+
+| 触发 | from-state 与 guard | 原子结果 |
+| --- | --- | --- |
+| `session_started` | registry-current；`session_lifecycle=new`；尚无 start event | `session_lifecycle=open`；创建 candidate work；`phase=waiting_host` |
+| `topic_candidates_presented` | `waiting_host`；candidate work 与 digests 匹配 | 完成 work、保存候选；`phase=choosing_topic` |
+| `custom_topic_submitted` | `choosing_topic`；无 pending session work | 保存原话、创建 clarification work；`phase=waiting_host` |
+| `topic_clarification_requested` | clarification work、generation 和 digest 匹配 | 完成 work、保存唯一澄清问题；`phase=clarifying_topic` |
+| `topic_clarification_answered` | `clarifying_topic`；parent 是当前问题 | 保存回答、创建新 clarification work；`phase=waiting_host` |
+| `topic_started` | 候选已选或澄清完成；无 active Topic；Contract/evidence/lens/task 合法 | 原子保存 selection + Contract + active Topic，创建 initial-turn work；`phase=waiting_host` |
+| `agent_turn_committed` | `waiting_host`；claim、parent、generation、digests 与 evidence 均有效 | 完成 work，更新 model/gates，保存恰好一个 question；`phase=awaiting_user` |
+| `learner_turn_submitted` | `awaiting_user`；parent 是当前问题；无 pending turn/work | 保存原文、创建 learner-reply work；`phase=waiting_host` |
+| `help_requested` | `awaiting_user`；当前 question 存在 | 更新 hint dependency、创建 help work；`phase=waiting_host` |
+| `lens_changed` | current active Topic；目标 lens 合法 | 推进 version；supersede pending work；需要新回复时以新 digest 创建 work |
+| `topic_paused` | active Topic 的任意 dialogue phase | 原子 pause、supersede work、保存 deterministic takeaway；`phase=none` |
+| `topic_resumed` | pause context 不是 `recoverable_error`；paused Topic、registry-current，Session 没有其他 active Topic，且 evidence 仍为 current/captured-dirty-exact | `unreviewed_turn` 创建 review work；`open_question` 恢复到 `awaiting_user`；`unresolved_trigger` 以保存的 kind/digest 和新 work id 重建到 `waiting_host`；三者必须恰好命中一个 |
+| `topic_resumed` | pause context 不是 `recoverable_error`；上述其他 guard 满足，但 evidence 为 stale/disputed/unavailable | 不恢复旧 question；创建 reground work 到 `waiting_host`，连续失败时进 `recoverable_error` |
+| `topic_resumed` | pause context 是 `recoverable_error` | 不自动恢复旧 work；必须同时携带用户选择的显式 recovery action，以新 trigger/work id 进入 `waiting_host`；不再匹配前两行 |
+| `topic_switch_requested` | active Topic | 原子 pause/supersede 当前 Topic、创建 candidate work；`phase=waiting_host` |
+| `topic_switch_requested` | `choosing_topic` 或 `clarifying_topic` | 无条件清除当前 candidate/clarification question；若存在 runnable work 则先 supersede；再创建唯一 candidate work；`phase=waiting_host` |
+| `topic_switch_requested` | `waiting_host(setup)` | supersede 唯一 setup/clarification work，清除它的 pending presentation，再创建唯一 candidate work；保持 `waiting_host` |
+| `topic_switch_requested` | paused/completed/phase=`none` 且没有 session-level pending work | 创建唯一 candidate work；`phase=waiting_host` |
+| `topic_switch_ready` | switch candidate work 与 digests 匹配 | 完成 work、保存候选；`phase=choosing_topic` |
+| `topic_completed` | active Topic；三个 gate + bridge + evidence guard 全满足 | 原子完成 work、Topic 和短总结；`phase=none`，无 question |
+| `evidence_status_changed` | active Topic + `awaiting_user`；相关 snapshot 改变 | 保留旧 question 为 stale audit，从 public current question 移除；downgrade gate/insight，创建 reground work；`session_phase=waiting_host` |
+| `evidence_status_changed` | active Topic + `waiting_host`；相关 snapshot 改变 | downgrade gate/insight，supersede 旧 work，以新 digest 创建 reground work；保持 `waiting_host` |
+| `evidence_status_changed` | paused/completed/非当前 Topic | 只 downgrade evidence/gate/insight 投影；不创建可发布 work，不自动 reopen Topic |
+| `evidence_status_changed` | `recoverable_error` | 记录 downgrade，不自动 retry；只有显式恢复 command 能创建新 work |
+| `work_dead_lettered` | durable failure events 已达到 retry 上限 | work=`dead_letter`；`phase=recoverable_error`，停止自动 retry |
+| 显式恢复 | `recoverable_error`；动作合法 | 使用新 trigger/work id 进入 `waiting_host` |
+| `session_ended` | `session_lifecycle=open`；无 active Topic、pending turn 或 runnable work；必须持有与 registry `session_end` fence 同 generation 的 `FencedQuiesceAuthority`，且不存在 A→B handoff | `session_lifecycle=ended`、`phase=none`；以后只允许 read 和 version-neutral export/audit/effect completion |
+
+候选选择或 custom-topic 澄清完成后，必须直接提交一个含 selection、Topic Contract 和 initial work 的 `topic_started` 复合事件，不能依赖两个 Observer 回调串联。同理，任何被产品定义为原子的行为都必须由单个复合事件表达，不能暴露中间半状态。
+
 ## 9. Browser HTTP v2
 
 `serve` 进程绑定单一 repo、learner 和 Dialogue Session，因此 URL 不接收任意 session id。最小接口：
@@ -581,10 +792,10 @@ Browser view model 只包含安全展示字段、允许动作、候选、最近�
 `/api/v2/topic` 的 custom flow：
 
 1. `action=custom` 携带 `text` 和 `lens`，追加 `custom_topic_submitted`；
-2. 如果范围足够明确，Agent result 直接标准化为唯一一次 `topic_selected` + `topic_started`；
+2. 如果范围足够明确，Agent result 直接标准化并提交唯一一次复合 `topic_started`；
 3. 如果含糊，追加 `topic_clarification_requested` 并展示一个澄清问题；
 4. 用户用 `action=clarify`、`parent_clarification_id` 和 `text` 回答，追加 `topic_clarification_answered`，重新触发 session-level `topic_clarification` work；
-5. 澄清完成后追加 `topic_clarified`，再进行唯一一次 `topic_selected` + `topic_started`；在此之前不存在 provisional Topic Contract，也不能创建 active Topic Run。
+5. 澄清完成后提交唯一一次复合 `topic_started`，payload 记录 `clarified_from`、标准化 Topic Contract 和 initial work；在此之前不存在 provisional Topic Contract，也不能创建 active Topic Run。
 
 稳定错误 envelope：
 
@@ -599,7 +810,7 @@ Browser view model 只包含安全展示字段、允许动作、候选、最近�
 }
 ```
 
-至少定义：`AUTH_REQUIRED`、`BAD_HOST`、`BAD_ORIGIN`、`CURSOR_EXPIRED`、`VERSION_CONFLICT`、`SESSION_DEACTIVATED`、`IDEMPOTENCY_CONFLICT`、`TURN_PENDING`、`CLAIM_HELD`、`CLAIM_EXPIRED`、`WORK_SUPERSEDED`、`VALIDATION_FAILED`、`PAYLOAD_TOO_LARGE`。
+至少定义：`AUTH_REQUIRED`、`BAD_HOST`、`BAD_ORIGIN`、`CURSOR_EXPIRED`、`VERSION_CONFLICT`、`TOPIC_STATE_CONFLICT`、`SESSION_DEACTIVATED`、`IDEMPOTENCY_CONFLICT`、`TURN_PENDING`、`CLAIM_HELD`、`CLAIM_EXPIRED`、`WORK_SUPERSEDED`、`VALIDATION_FAILED`、`PAYLOAD_TOO_LARGE`。`TOPIC_STATE_CONFLICT` 映射 HTTP 409，`retryable=false`，`recovery=reload_state`；加载新 state 后只能提交在新状态中合法的命令。
 
 ## 10. Host Adapter CLI
 
@@ -648,7 +859,7 @@ Agent publish 结果 union：
 
 - `dialogue_turn`：自然回复、唯一问题、intent、gate progress、evidence ids、insight ops，以及供确定性暂停摘要使用的当前最高优先缺口；
 - `topic_candidates`：最多四个候选、label、推荐 id、仓库依据；
-- `topic_clarification`：一个澄清问题，或一个已足够明确、可交给 `topic_selected/topic_started` 的标准化 custom topic；
+- `topic_clarification`：一个澄清问题，或一个已足够明确、可由 Runtime 归约成复合 `topic_started` 的标准化 custom topic；
 - `topic_summary`：自然完成或显式请求深化总结时使用，包含 takeaway、confirmed、open questions、next suggestion；普通暂停不依赖它。
 
 active 的 `dialogue_turn` 必须恰好一个问题；paused/completed 必须 `question=null` 且有短 takeaway。
@@ -674,7 +885,7 @@ Browser stream keepalive、Host Adapter lease renewal 和本地阻塞等待都�
 
 候选选择前、提出新问题前、提交 gate/insight 结论前、完成话题前和导出 confirmed insight 前，都只复验本轮相关 focused evidence。
 
-- 引用内容 hash 改变：Runtime 在同一原子转换中 supersede 旧 work、追加 `evidence_status_changed`、推进 conversation version，并基于新 evidence digest 排队 `reground` work；相关 insight/gate 转为 `stale`，旧 Host result 不得发布为 confirmed；
+- 引用内容 hash 改变：Runtime 追加 `evidence_status_changed`、推进 conversation version，相关 insight/gate 转为 `stale`，旧 Host result 不得发布为 confirmed。后续 action 必须由当前 aggregate 状态决定：`awaiting_user` 移除已 stale 的 public current question 并转 `waiting_host`；`waiting_host` supersede 旧 work；两者都基于新 digest 排队一个 `reground` work。paused/completed/非当前 Topic 只 downgrade，不排队 work、不自动 reopen；`recoverable_error` 只记录 downgrade，等待显式恢复。
 - HEAD 前进但引用证据未变：快速复验后可继续；
 - 无关 dirty 文件变化：不应中断当前话题；
 - 权威文档与实现冲突：标记 `disputed`，把冲突呈现为待澄清问题；
@@ -864,11 +1075,11 @@ Profile 和每个导出条目必须绑定 repo id、commit/dirty state、时间�
 - browser token 权限不能 claim/publish；Host 不能使用 browser token。
 - repo prompt injection 测试必须证明 X-Sync API/result schema 不提供外部或破坏性动作，且 Host instructions 将仓库内容标为不可信数据；宿主平台若授予额外 shell/network 权限，其最终隔离能力单独记录，不能伪装成 Skill 已强制阻断。
 
-### 18.4 真实 E2E
+### 18.4 真实 E2E 与宿主能力证据
 
 - Codex `$x-sync`：首次 scan → 候选 → lens → 网页回答 → Host 自动收到 → 下一问自动回到网页。
-- Claude Code `/x-sync` 与 `/x-sync:x-sync`：同样闭环。
-- 两条闭环都必须在同一个尚未 final 的 Agent turn 和公开支持的工具通道内连续完成至少三个 browser → Host → browser 回合；其中一次 idle 跨过 lease renewal，随后执行 pause 或 switch，并覆盖最大 pending 时长、用户取消、工具中断和重新连接。启动另一个模型进程不计通过。
+- Claude Code `/x-sync` 与 `/x-sync:x-sync`：官方能力、Skill/plugin 发现、公共 MCP harness 和同一 Runtime Core 契约必须通过；若执行机无法登录，保留 `LOCAL_RUNTIME_WAIVED` 而不伪造真机记录。
+- 真机环境可用时，两个宿主都应在同一尚未 final 的 Agent turn 中观测至少三个 browser → Host → browser 回合、idle/lease、pause/switch、取消、中断与重连。这些记录提高宿主实证等级，但不要求 stdio 在断开后同 turn 透明恢复；断开后必须走耐久化的新 turn 恢复路径。
 - 两种宿主都覆盖 user/project 安装、`-d` 外部路径、空格路径和 Git 子目录 canonicalization。
 - Host 掉线和网页刷新后能从已保存 turn 恢复；Runtime 重启后通过新的 serve URL/token 重新打开，旧 token 不再有效，但对话状态不丢。
 - v1 冻结 fixture 可打开、继续、回答、review、完成、report 和使用 API v1。
@@ -882,18 +1093,35 @@ Profile 和每个导出条目必须绑定 repo id、commit/dirty state、时间�
 
 测试并发使用 barrier 和 fake clock，不依赖真实 sleep 形成偶发测试。
 
+### 18.6 代码质量与架构门槛
+
+- v2 代码必须进入独立的 `skills/x-sync/scripts/xsync_v2/` package；现有约 4,600 行的 `xsync.py` 只增加薄 CLI/兼容适配，不继续承载 v2 领域逻辑。
+- domain types、command decision、event reducer、event store、Observer Hub、registry、work/lease、HTTP、Host Adapter、evidence 和 export 按责任拆分；禁止一个模块同时拥有协议解析、状态迁移和文件 I/O。
+- production runtime 继续只依赖 Python 标准库。开发质量工具可以作为 dev dependency；新 v2 package 必须通过 Ruff、严格类型检查和单元测试，CI 使用固定 Python 版本矩阵。
+- 领域对象优先使用 frozen dataclass、Enum 和显式 tagged union；JSON/dict 只存在于 HTTP、IPC、事件 codec 和磁盘边界，不能让无类型 dict 穿透状态机内核。
+- 状态机核心不得直接读取时钟、随机数、环境变量、网络或文件系统；Clock、ID generator、evidence snapshot、registry generation 和持久化 port 都通过显式接口注入。
+- 每个 transition 必须有 happy-path、非法来源状态、guard 失败和 replay 测试；transition table 做穷举覆盖，新增 command/state 而未声明规则时测试必须失败。
+- reducer 必须满足确定性、事件重放等价和非法事件 fail closed；使用标准库生成式序列测试覆盖重复、乱序、缺失、损坏和任意合法迁移组合。
+- Observer 必须有顺序、重复交付、失败隔离、watermark 恢复、慢消费者和禁止递归 mutation 的 contract tests；测试 double 直接尝试改 canonical state 时必须失败。
+- 并发测试使用 barrier、fake clock 和 fault injector；禁止用真实 `sleep` 证明正确性。所有 idempotency、lease、fence 和 crash recovery 测试必须可重复。
+- registry、per-session writer 和 derived-view 锁必须由独立 `locking.py` 提供跨进程 OS lock，不得以 `threading.Lock` 假装防护两个 Runtime 进程。公开 semantic 入口自己按 `registry → session writer` 顺序获锁并传递不可伪造的 held-lock authority；不暴露可绕过 registry fence 的裸 committer。测试必须包含真实 multiprocessing/subprocess 竞争与进程崩溃释放，不只是线程测试。
+- 新 public API 有稳定错误码、类型注解和简短 docstring；不使用 bare `except`，不静默吞掉 integrity、schema 或 Observer lag 错误，也不把 traceback 返回浏览器。
+- domain/reducer/observer 核心要求 branch coverage 不低于 90%；覆盖率只是门槛，不替代状态迁移矩阵和故障注入。
+- 每个实施任务遵循测试先行、小提交和独立 review；任何绕过状态机直接写 Dialogue event/state 的代码都视为架构阻断项。
+
 ## 19. 实施顺序的设计门槛
 
 详细实施计划在本设计批准后另写。高层门槛顺序固定为：
 
-1. **Phase 0 可行性 spike**：先证明 Codex 和 Claude Code 都能在同一个未 final turn 内连续完成至少三个真实 browser → Host → browser 回合，其中含跨 lease renewal 的 idle 与 pause/switch，且空闲协议不发起模型调用。
-2. **协议与 reducer**：v2 records、event replay、command idempotency、work/lease、freshness、export transaction。
-3. **纵向最小体验**：一个仓库绑定话题、一个 active Topic Run、连续网页、pause/resume 和短总结。
-4. **自适应与切换**：learner model、三个 gate、业务技术桥接、topic candidates、switch。
-5. **画像与复习**：topic index、多维 readiness、延迟复习。
-6. **兼容与发布**：冻结 v1 fixture、双宿主真实 E2E、全局安装同步和文档更新。
+1. **Phase 0 宿主能力门槛**：Codex 与 Claude Code 的公开能力、Skill 发现、公共 MCP harness 和 bounded new-turn recovery 契约通过；有可用账号的环境再补充同 turn 三回合、idle/lease 与 pause/switch 真机观测，不伪造无法登录宿主的运行证据。
+2. **状态机内核与协议**：typed domain records、transition table、纯 reducer、event replay、command idempotency 和状态不变量。
+3. **Observer 与协调层**：after-commit Observer Hub、Browser stream、Host wake、topic-index projector、work/lease 和 failure replay。
+4. **纵向最小体验**：一个仓库绑定话题、一个 active Topic Run、连续网页、pause/resume、短总结和确定性导出。
+5. **自适应与切换**：learner model、三个 gate、业务技术桥接、topic candidates、switch、freshness/reground。
+6. **画像与复习**：topic index、多维 readiness、延迟复习。
+7. **兼容与发布**：冻结 v1 fixture、双宿主真实 E2E、全局安装同步和文档更新。
 
-Phase 0 任一宿主无法可靠保持或恢复 Host Adapter 时，不得宣称该宿主支持“无需回终端的连续网页对话”。可以先保留安全的“回答已保存，等待 Host 重新连接”降级路径。
+任一宿主无法保持当前 Host Adapter 时，不得宣称“同 turn 透明恢复”；产品必须进入“回答已保存，等待 Host 重新连接”的 bounded degradation，并由新 Agent turn 继续。
 
 ## 20. 示例对话
 

@@ -90,7 +90,17 @@ def sha256_file(path: Path) -> str:
 
 def ignored_source_name(name: str) -> bool:
     return (
-        name in {MARKER_NAME, "__pycache__", ".DS_Store"}
+        name
+        in {
+            MARKER_NAME,
+            "__pycache__",
+            ".mypy_cache",
+            ".pytest_cache",
+            ".ruff_cache",
+            ".DS_Store",
+        }
+        or name == ".coverage"
+        or name.startswith(".coverage.")
         or name.endswith((".pyc", ".pyo"))
     )
 

@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Phase 0 Host Feasibility</title>
+  <style>
+    :root { color-scheme: light dark; font: 16px/1.45 system-ui, sans-serif; }
+    body { margin: 0 auto; max-width: 58rem; padding: 2rem; }
+    fieldset { display: grid; gap: .75rem; margin: 1rem 0; }
+    label { display: grid; gap: .25rem; }
+    input, textarea, button { font: inherit; padding: .55rem; }
+    textarea { min-height: 5rem; }
+    .actions { display: flex; flex-wrap: wrap; gap: .5rem; }
+    pre { border: 1px solid currentColor; min-height: 8rem; overflow: auto; padding: 1rem; }
+  </style>
+</head>
+<body>
+  <h1>Phase 0 Host Feasibility</h1>
+  <p>This disposable loopback harness exercises durable browser-to-host dialogue.</p>
+
+  <fieldset>
+    <legend>Connection</legend>
+    <label>Server URL <input id="url" autocomplete="off"></label>
+    <label>Bearer token <input id="token" type="password" autocomplete="off"></label>
+  </fieldset>
+
+  <fieldset>
+    <legend>Question round</legend>
+    <label>Round ID <input id="round" value="round-1"></label>
+    <label>Question <textarea id="question">What did you observe?</textarea></label>
+    <label>Answer <textarea id="answer"></textarea></label>
+    <div class="actions">
+      <button id="publish" type="button">Publish question</button>
+      <button id="respond" type="button">Answer question</button>
+      <button id="read-answer" type="button">Read durable answer</button>
+    </div>
+  </fieldset>
+
+  <div class="actions">
+    <button id="refresh" type="button">Refresh state</button>
+    <button id="status" type="button">Refresh status</button>
+    <button id="pause" type="button">Pause</button>
+    <button id="switch" type="button">Switch</button>
+  </div>
+  <pre id="output" aria-live="polite">Ready.</pre>
+
+  <script>
+    "use strict";
+    const byId = (id) => document.getElementById(id);
+    byId("url").value = location.origin;
+
+    function requestId(prefix) {
+      return prefix + "-" + crypto.randomUUID();
+    }
+
+    async function call(path, body) {
+      const options = {
+        headers: {Authorization: "Bearer " + byId("token").value}
+      };
+      if (body !== undefined) {
+        options.method = "POST";
+        options.headers["Content-Type"] = "application/json";
+        options.body = JSON.stringify(body);
+      }
+      const response = await fetch(byId("url").value + path, options);
+      const result = await response.json();
+      byId("output").textContent = JSON.stringify(result, null, 2);
+      if (!response.ok) throw new Error(result.error || response.statusText);
+      return result;
+    }
+
+    function showError(error) {
+      byId("output").textContent = String(error);
+    }
+
+    byId("publish").addEventListener("click", () => call("/question/publish", {
+      round_id: byId("round").value,
+      question: byId("question").value,
+      request_id: requestId("question")
+    }).catch(showError));
+    byId("respond").addEventListener("click", () => call("/question/answer", {
+      round_id: byId("round").value,
+      text: byId("answer").value,
+      request_id: requestId("answer")
+    }).catch(showError));
+    byId("read-answer").addEventListener("click", () => call("/question/answer-for", {
+      round_id: byId("round").value
+    }).catch(showError));
+    byId("refresh").addEventListener("click", () => call("/state").catch(showError));
+    byId("status").addEventListener("click", () => call("/status").catch(showError));
+    byId("pause").addEventListener("click", () => call("/control", {action: "pause"}).catch(showError));
+    byId("switch").addEventListener("click", () => call("/control", {action: "switch"}).catch(showError));
+  </script>
+</body>
+</html>
