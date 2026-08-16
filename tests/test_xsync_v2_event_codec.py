@@ -54,6 +54,8 @@ from xsync_v2.event_codec import (
     DialogueActor,
     DialogueCommandReceipt,
     DialogueWriteRequestRecord,
+    DurableEffectIntent,
+    EffectKind,
     build_state_snapshot,
     build_stored_event,
     build_transaction_marker,
@@ -582,6 +584,61 @@ class EventCodecTest(unittest.TestCase):
             decode_state_snapshot(encode_state_snapshot(snapshot)),
         )
         self.assertEqual(marker.state_digest, dialogue_state_digest(state))
+
+    def test_export_effect_intent_is_canonical_and_sequence_bound(self):
+        _state, events = event_sequence()
+        first_state = reduce(
+            initial_dialogue_state("dialogue-1", 1),
+            events[0],
+        )
+        first_record = stored(events[0])
+        intent = DurableEffectIntent(
+            intent_id="intent-export-1",
+            kind=EffectKind.EXPORT_MATERIALIZATION,
+            session_id="dialogue-1",
+            export_id="export-1",
+            as_of_sequence=1,
+            formats=("json", "markdown"),
+            payload_digest=digest("export-payload"),
+        )
+        marker = build_transaction_marker(
+            session_id="dialogue-1",
+            transaction_id="transaction-export-1",
+            command_id=events[0].command_id,
+            request_digest=REAL_DIGEST,
+            registry_generation=1,
+            previous_marker_hash=None,
+            state=first_state,
+            events=(first_record,),
+            effect_intents=(intent,),
+        )
+        self.assertEqual(
+            marker,
+            decode_transaction_marker(encode_transaction_marker(marker)),
+        )
+
+        invalid_intents = (
+            replace(intent, intent_id="../escape"),
+            replace(intent, session_id="dialogue-2"),
+            replace(intent, as_of_sequence=2),
+            replace(intent, formats=("markdown", "json")),
+        )
+        for invalid in invalid_intents:
+            with self.subTest(intent=invalid), self.assertRaisesRegex(
+                ValueError,
+                "INVALID_TRANSACTION_MARKER",
+            ):
+                build_transaction_marker(
+                    session_id="dialogue-1",
+                    transaction_id="transaction-export-invalid",
+                    command_id=events[0].command_id,
+                    request_digest=REAL_DIGEST,
+                    registry_generation=1,
+                    previous_marker_hash=None,
+                    state=first_state,
+                    events=(first_record,),
+                    effect_intents=(invalid,),
+                )
 
     def test_noncanonical_duplicate_unknown_and_trailing_data_fail_closed(self):
         _state, events = event_sequence()

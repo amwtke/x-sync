@@ -95,6 +95,25 @@ class ActorKind(StrEnum):
     RUNTIME = "runtime"
 
 
+class EffectKind(StrEnum):
+    """Closed durable post-commit work kinds."""
+
+    EXPORT_MATERIALIZATION = "export_materialization"
+
+
+@dataclass(frozen=True, slots=True)
+class DurableEffectIntent:
+    """Immutable export work committed atomically with its source event."""
+
+    intent_id: str
+    kind: EffectKind
+    session_id: str
+    export_id: str
+    as_of_sequence: int
+    formats: tuple[str, ...]
+    payload_digest: str
+
+
 @dataclass(frozen=True, slots=True)
 class DialogueActor:
     """The bounded actor identity written into one event envelope."""
@@ -145,7 +164,7 @@ class TransactionMarker:
     to_sequence: int
     previous_marker_hash: str | None
     state_digest: str
-    effect_intents: tuple[()]
+    effect_intents: tuple[DurableEffectIntent, ...]
     events: tuple[MarkerEventRef, ...]
     marker_hash: str
 
@@ -254,6 +273,7 @@ DOMAIN_TYPES = frozenset(
         WorkRecoveryRequested,
         WorkRequeued,
         DialogueActor,
+        DurableEffectIntent,
         StoredDialogueEvent,
         MarkerEventRef,
         TransactionMarker,
@@ -833,6 +853,35 @@ def marker_event_ref(record: StoredDialogueEvent) -> MarkerEventRef:
     )
 
 
+def _valid_effect_intents(
+    value: object,
+    session_id: str,
+    maximum_sequence: int,
+) -> bool:
+    if type(value) is not tuple:
+        return False
+    intents = cast(tuple[object, ...], value)
+    if any(type(item) is not DurableEffectIntent for item in intents):
+        return False
+    typed = cast(tuple[DurableEffectIntent, ...], intents)
+    return (
+        len(typed) <= 16
+        and len({item.intent_id for item in typed}) == len(typed)
+        and all(
+            is_protocol_id(item.intent_id)
+            and item.kind is EffectKind.EXPORT_MATERIALIZATION
+            and item.session_id == session_id
+            and is_protocol_id(item.export_id)
+            and type(item.as_of_sequence) is int
+            and item.as_of_sequence >= 0
+            and item.as_of_sequence <= maximum_sequence
+            and item.formats == ("json", "markdown")
+            and is_sha256_digest(item.payload_digest)
+            for item in typed
+        )
+    )
+
+
 def build_transaction_marker(
     *,
     session_id: str,
@@ -843,6 +892,7 @@ def build_transaction_marker(
     previous_marker_hash: str | None,
     state: DialogueState,
     events: tuple[StoredDialogueEvent, ...],
+    effect_intents: tuple[DurableEffectIntent, ...] = (),
 ) -> TransactionMarker:
     """Build a marker whose hash binds the event list and resulting state."""
     if (
@@ -853,6 +903,11 @@ def build_transaction_marker(
         or type(events) is not tuple
         or not events
         or type(state) is not DialogueState
+        or not _valid_effect_intents(
+            effect_intents,
+            session_id,
+            state.sequence,
+        )
         or state.session_id != session_id
         or (
             previous_marker_hash is not None
@@ -892,7 +947,7 @@ def build_transaction_marker(
         to_sequence=references[-1].sequence,
         previous_marker_hash=previous_marker_hash,
         state_digest=dialogue_state_digest(state),
-        effect_intents=(),
+        effect_intents=effect_intents,
         events=references,
         marker_hash="",
     )
@@ -909,7 +964,7 @@ def build_transaction_marker(
         to_sequence=marker.to_sequence,
         previous_marker_hash=marker.previous_marker_hash,
         state_digest=marker.state_digest,
-        effect_intents=(),
+        effect_intents=marker.effect_intents,
         events=marker.events,
         marker_hash=digest,
     )
@@ -965,8 +1020,11 @@ def _validate_transaction_marker(marker: object) -> None:
             marker.previous_marker_hash is not None
             and not is_sha256_digest(marker.previous_marker_hash)
         )
-        or type(marker.effect_intents) is not tuple
-        or marker.effect_intents
+        or not _valid_effect_intents(
+            marker.effect_intents,
+            marker.session_id,
+            marker.to_sequence,
+        )
         or type(marker.events) is not tuple
         or not marker.events
         or any(type(item) is not MarkerEventRef for item in marker.events)
@@ -1000,7 +1058,7 @@ def _validate_transaction_marker(marker: object) -> None:
         to_sequence=marker.to_sequence,
         previous_marker_hash=marker.previous_marker_hash,
         state_digest=marker.state_digest,
-        effect_intents=(),
+        effect_intents=marker.effect_intents,
         events=marker.events,
         marker_hash="",
     )

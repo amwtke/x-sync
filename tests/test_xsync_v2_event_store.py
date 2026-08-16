@@ -32,6 +32,8 @@ from xsync_v2.event_codec import (
     MAX_RECORD_BYTES,
     ActorKind,
     DialogueActor,
+    DurableEffectIntent,
+    EffectKind,
     canonical_json_bytes,
     sha256_digest,
 )
@@ -222,6 +224,43 @@ class EventStoreTest(unittest.TestCase):
         recovered = self.new_log()
         self.assertEqual(outcome.state, recovered.tip().state)
         self.assertEqual(outcome.receipt, recovered.tip().receipts[0])
+        recovered.close()
+
+    def test_durable_export_intent_is_marker_bound_and_idempotent(self):
+        intent = DurableEffectIntent(
+            "intent-export-1",
+            EffectKind.EXPORT_MATERIALIZATION,
+            "dialogue-1",
+            "export-1",
+            1,
+            ("json", "markdown"),
+            digest("export-payload"),
+        )
+        log = self.new_log()
+        first = replace(request(first_event()), effect_intents=(intent,))
+        outcome = self.commit(log, first)
+        self.assertEqual((intent,), log.read_effect_intents())
+
+        replayed = self.commit(log, first)
+        self.assertTrue(replayed.replayed)
+        self.assertEqual(outcome.receipt, replayed.receipt)
+        log.close()
+
+        recovered = self.new_log()
+        self.assertEqual((intent,), recovered.read_effect_intents())
+        duplicate = replace(
+            request(
+                second_event(),
+                transaction="transaction-2",
+                request_label="two",
+            ),
+            effect_intents=(intent,),
+        )
+        with self.assertRaisesRegex(
+            DialogueStoreError,
+            "DUPLICATE_EFFECT_INTENT_ID",
+        ):
+            self.commit(recovered, duplicate)
         recovered.close()
 
     def test_crash_before_marker_leaves_no_fact_and_orphan_is_quarantined(self):

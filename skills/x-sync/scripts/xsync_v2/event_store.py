@@ -22,6 +22,7 @@ from .event_codec import (
     MAX_RECORD_BYTES,
     DialogueActor,
     DialogueCommandReceipt,
+    DurableEffectIntent,
     MarkerEventRef,
     StoredDialogueEvent,
     TransactionMarker,
@@ -67,6 +68,7 @@ class DialogueCommitRequest:
     registry_generation: int
     events: tuple[CommittedDialogueEvent, ...]
     metadata: tuple[EventMetadata, ...]
+    effect_intents: tuple[DurableEffectIntent, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -368,6 +370,18 @@ class _DialogueTransactionLog:
             first = marker.to_sequence + 1
         return tuple(result)
 
+    def read_effect_intents(self) -> tuple[DurableEffectIntent, ...]:
+        """Replay all committed durable effects in marker order."""
+        self._require_open()
+        self._synchronize()
+        result: list[DurableEffectIntent] = []
+        first = 1
+        while first <= self._tip.state.sequence:
+            marker = self._read_marker(first)
+            result.extend(marker.effect_intents)
+            first = marker.to_sequence + 1
+        return tuple(result)
+
     def commit(
         self,
         request: DialogueCommitRequest,
@@ -531,6 +545,11 @@ class _DialogueTransactionLog:
             or len(request.metadata) != len(request.events)
             or any(type(item) is not CommittedDialogueEvent for item in request.events)
             or any(type(item) is not EventMetadata for item in request.metadata)
+            or type(request.effect_intents) is not tuple
+            or any(
+                type(item) is not DurableEffectIntent
+                for item in request.effect_intents
+            )
         ):
             raise DialogueStoreError("INVALID_COMMIT_REQUEST")
         command_id = request.events[0].command_id
@@ -549,6 +568,21 @@ class _DialogueTransactionLog:
         }
         if any(event_id in committed_event_ids for event_id in event_ids):
             raise DialogueStoreError("DUPLICATE_EVENT_ID")
+        requested_intent_ids = tuple(
+            item.intent_id for item in request.effect_intents
+        )
+        if len(requested_intent_ids) != len(set(requested_intent_ids)):
+            raise DialogueStoreError("DUPLICATE_EFFECT_INTENT_ID")
+        committed_intent_ids: set[str] = set()
+        first = 1
+        while first <= self._tip.state.sequence:
+            marker = self._read_marker(first)
+            committed_intent_ids.update(
+                item.intent_id for item in marker.effect_intents
+            )
+            first = marker.to_sequence + 1
+        if any(item in committed_intent_ids for item in requested_intent_ids):
+            raise DialogueStoreError("DUPLICATE_EFFECT_INTENT_ID")
         if any(
             receipt.transaction_id == request.transaction_id
             for receipt in self._tip.receipts
@@ -643,6 +677,7 @@ class _DialogueTransactionLog:
                 previous_marker_hash=self._tip.last_marker_hash,
                 state=state,
                 events=tuple(stored_events),
+                effect_intents=request.effect_intents,
             )
             encoded_marker = encode_transaction_marker(marker)
             if len(encoded_marker) > MAX_RECORD_BYTES:
