@@ -23,7 +23,7 @@ from .host_context import (
     build_host_context,
 )
 from .host_work import (
-    HostWorkPublishRequest,
+    HostResultPublishRequest,
     HostWorkService,
     LeaseExhaustionRecordRequest,
 )
@@ -409,9 +409,9 @@ class HostControl:
             outcome.replayed,
         )
 
-    def publish(
+    def publish_result(
         self,
-        request: HostWorkPublishRequest,
+        request: HostResultPublishRequest,
     ) -> DialogueCommitOutcome:
-        """Delegate an idempotent result to the lease-fenced work service."""
-        return self._work_service.publish(request)
+        """Publish the shared strict Host result through trusted derivation."""
+        return self._work_service.publish_result(request)

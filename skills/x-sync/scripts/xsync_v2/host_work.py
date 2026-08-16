@@ -39,6 +39,7 @@ from .domain import (
     TopicSwitchRequested,
     TopicStarted,
     TriggerBinding,
+    TriggerKind,
     WorkFailure,
     WorkFailureCategory,
     WorkRecoveryRequested,
@@ -62,6 +63,17 @@ from .event_store import (
     EventMetadata,
     _DialogueTransactionLog,
 )
+from .host_result import (
+    DialogueTurnResult,
+    HostResult,
+    HostResultError,
+    TopicCandidatesResult,
+    TopicStartedResult,
+    WorkFailureResult,
+    encode_host_result,
+    host_command_id,
+    host_result_command,
+)
 from .lease_store import (
     AuthoritativeWorkSnapshot,
     LeaseExhaustionProof,
@@ -78,6 +90,7 @@ from .registry_store import RegistryStoreError
 from .secure_fs import SecureFsError
 from .state_machine import (
     MAX_AUTOMATIC_WORK_ATTEMPTS,
+    PUBLISHABLE_EVIDENCE,
     RETRYABLE_WORK_FAILURES,
     decide,
 )
@@ -94,6 +107,14 @@ _ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
 
 HostWorkCommand: TypeAlias = (
     PresentCandidates | StartTopic | CommitAgentTurn | ReportWorkFailure
+)
+_HOST_RESULT_TYPES = frozenset(
+    {
+        TopicCandidatesResult,
+        TopicStartedResult,
+        DialogueTurnResult,
+        WorkFailureResult,
+    }
 )
 
 
@@ -119,34 +140,24 @@ class HostWorkPublishRequest:
 
 
 @dataclass(frozen=True, slots=True)
+class HostResultPublishRequest:
+    """One strict Host result before trusted command/context derivation."""
+
+    idempotency_key: str
+    work: RunnableWork
+    result: HostResult
+    occurred_at: str
+    actor: DialogueActor
+    fence: PublishFence
+
+
+@dataclass(frozen=True, slots=True)
 class LeaseExhaustionRecordRequest:
     """Runtime request to canonically resolve one exhausted lease history."""
 
     proof: LeaseExhaustionProof
     occurred_at: str
     actor: DialogueActor
-
-
-def host_command_id(idempotency_key: str) -> str:
-    """Derive the sole valid dialogue command id for a Host idempotency key."""
-    if (
-        type(idempotency_key) is not str
-        or _ID_PATTERN.fullmatch(idempotency_key) is None
-    ):
-        raise HostWorkServiceError("INVALID_IDEMPOTENCY_KEY")
-    digest = sha256_digest(
-        canonical_json_bytes(
-            {
-                "protocol_version": PROTOCOL_VERSION,
-                "record_type": "host_command_identity",
-                "idempotency_key": idempotency_key,
-            }
-        )
-    )
-    try:
-        return _stable_id("host.command", digest)
-    except CoordinatorError as exc:
-        raise HostWorkServiceError(exc.code) from exc
 
 
 def _current_queued_work(state: DialogueState) -> CurrentWorkState:
@@ -289,6 +300,23 @@ def _request_digest(request: HostWorkPublishRequest) -> str:
     )
 
 
+def _result_request_digest(request: HostResultPublishRequest) -> str:
+    result_digest = sha256_digest(encode_host_result(request.result))
+    return sha256_digest(
+        canonical_json_bytes(
+            {
+                "schema_version": SCHEMA_VERSION,
+                "record_type": "host_result_publish_request",
+                "protocol_version": PROTOCOL_VERSION,
+                "idempotency_key": request.idempotency_key,
+                "work": _work_tree(request.work),
+                "stable_fence": _stable_fence_tree(request.fence),
+                "result_digest": result_digest,
+            }
+        )
+    )
+
+
 def _lease_exhaustion_request_digest(
     request: LeaseExhaustionRecordRequest,
 ) -> str:
@@ -355,6 +383,18 @@ class HostWorkService:
         collector = self._coordinator._start_operation()
         try:
             return self._publish(request, request_digest, collector)
+        finally:
+            self._coordinator._finish_operation(collector)
+
+    def publish_result(
+        self,
+        request: HostResultPublishRequest,
+    ) -> DialogueCommitOutcome:
+        """Publish a strict Host result with receipt lookup before derivation."""
+        request, request_digest = self._validate_result_request(request)
+        collector = self._coordinator._start_operation()
+        try:
+            return self._publish_result(request, request_digest, collector)
         finally:
             self._coordinator._finish_operation(collector)
 
@@ -443,6 +483,30 @@ class HostWorkService:
             raise HostWorkServiceError(code) from exc
         return request, digest
 
+    @staticmethod
+    def _validate_result_request(
+        request: object,
+    ) -> tuple[HostResultPublishRequest, str]:
+        if (
+            type(request) is not HostResultPublishRequest
+            or type(request.result) not in _HOST_RESULT_TYPES
+            or type(request.work) is not RunnableWork
+            or type(request.actor) is not DialogueActor
+            or request.actor.kind is not ActorKind.HOST
+            or type(request.fence) is not PublishFence
+            or not _valid_timestamp(request.occurred_at)
+            or _ID_PATTERN.fullmatch(request.actor.actor_id) is None
+        ):
+            raise HostWorkServiceError("INVALID_HOST_RESULT_REQUEST")
+        try:
+            host_command_id(request.idempotency_key)
+            validate_runnable_work(request.work)
+            digest = _result_request_digest(request)
+        except (HostResultError, LeaseStoreError, ValueError, WorkError) as exc:
+            code = getattr(exc, "code", "INVALID_HOST_RESULT_REQUEST")
+            raise HostWorkServiceError(code) from exc
+        return request, digest
+
     def _publish(
         self,
         request: HostWorkPublishRequest,
@@ -512,6 +576,162 @@ class HostWorkService:
         ) as exc:
             code = getattr(exc, "code", "HOST_WORK_PUBLISH_FAILED")
             raise HostWorkServiceError(code) from exc
+
+    def _publish_result(
+        self,
+        request: HostResultPublishRequest,
+        request_digest: str,
+        collector: CommittedFactCollector,
+    ) -> DialogueCommitOutcome:
+        coordinator = self._coordinator
+        command_id = host_command_id(request.idempotency_key)
+        try:
+            with coordinator._locks.registry_exclusive() as registry_authority:
+                registry_log = coordinator._open_registry(registry_authority)
+                try:
+                    registry_state = registry_log.tip().state
+                    registration = _registration(
+                        registry_state,
+                        request.work.session_id,
+                    )
+                    if (
+                        registration is None
+                        or type(registration.activated_generation) is not int
+                        or registration.activated_generation < 1
+                    ):
+                        raise HostWorkServiceError("SESSION_DEACTIVATED")
+                    with coordinator._locks.session_exclusive(
+                        request.work.session_id,
+                        registry_authority,
+                    ) as session_authority:
+                        dialogue_log = coordinator._open_existing_dialogue(
+                            request.work.session_id,
+                            registration.activated_generation,
+                            session_authority,
+                        )
+                        try:
+                            replay = self._replay_command_receipt(
+                                dialogue_log,
+                                session_authority,
+                                session_id=request.work.session_id,
+                                registry_generation=(
+                                    request.work.registry_generation
+                                ),
+                                command_id=command_id,
+                                request_digest=request_digest,
+                                occurred_at=request.occurred_at,
+                                actor=request.actor,
+                                collector=collector,
+                            )
+                            if replay is not None:
+                                return replay
+                            prepared = self._prepare_result_request(
+                                dialogue_log,
+                                registry_state,
+                                registration.config_digest,
+                                request,
+                                request_digest,
+                            )
+                            return self._publish_new(
+                                dialogue_log,
+                                session_authority,
+                                registry_state,
+                                registration.config_digest,
+                                prepared,
+                                request_digest,
+                                collector,
+                            )
+                        finally:
+                            dialogue_log.close()
+                finally:
+                    registry_log.close()
+        except HostWorkServiceError:
+            raise
+        except (
+            CoordinatorError,
+            DialogueStoreError,
+            HostResultError,
+            LeaseStoreError,
+            RegistryStoreError,
+            SecureFsError,
+            LockError,
+            WorkError,
+            ValueError,
+        ) as exc:
+            code = getattr(exc, "code", "HOST_RESULT_PUBLISH_FAILED")
+            raise HostWorkServiceError(code) from exc
+
+    def _prepare_result_request(
+        self,
+        log: _DialogueTransactionLog,
+        registry_state: RegistryState,
+        config_digest: str,
+        request: HostResultPublishRequest,
+        request_digest: str,
+    ) -> HostWorkPublishRequest:
+        tip = log.tip()
+        events = log.read_committed(after_sequence=0)
+        origin = _work_origin(tip.state, events)
+        authoritative = derive_runnable_work(tip.state, origin)
+        if (
+            authoritative is None
+            or authoritative != request.work
+            or registry_state.current_session_id != request.work.session_id
+            or registry_state.pending_handoff is not None
+            or registry_state.generation != request.work.registry_generation
+        ):
+            raise HostWorkServiceError("WORK_SUPERSEDED")
+        current = _current_queued_work(tip.state)
+        config = self._coordinator._load_config_checked(
+            request.work.session_id,
+            config_digest,
+        )
+        evidence = self._coordinator._verify_evidence(config)
+        command = host_result_command(
+            request.result,
+            idempotency_key=request.idempotency_key,
+            work=request.work,
+            selected_candidate=tip.state.selected_candidate,
+        )
+        trigger: TriggerBinding | None = current.trigger
+        if type(command) is ReportWorkFailure:
+            trigger = None
+        elif type(command) is StartTopic:
+            input_digest = sha256_digest(
+                canonical_json_bytes(
+                    {
+                        "record_type": "topic_initial_turn_input",
+                        "source_work_binding_digest": request.work.binding_digest,
+                        "contract_digest": command.contract.contract_digest,
+                        "evidence_digest": evidence.evidence_digest,
+                        "host_result_request_digest": request_digest,
+                    }
+                )
+            )
+            trigger = TriggerBinding(
+                (
+                    TriggerKind.INITIAL_TURN
+                    if evidence.health in PUBLISHABLE_EVIDENCE
+                    else TriggerKind.REGROUND
+                ),
+                _stable_id("work.initial", request_digest),
+                config.runtime_epoch,
+                None,
+                command.contract.contract_digest,
+                input_digest,
+                evidence.evidence_digest,
+            )
+        prepared = HostWorkPublishRequest(
+            request.idempotency_key,
+            request.work,
+            command,
+            DecisionContext(registry_state.generation, trigger, evidence),
+            request.occurred_at,
+            request.actor,
+            request.fence,
+        )
+        self._validate_request(prepared)
+        return prepared
 
     def _record_lease_exhaustion(
         self,

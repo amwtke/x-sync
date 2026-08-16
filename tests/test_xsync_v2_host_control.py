@@ -10,7 +10,7 @@ from xsync_v2.coordinator import (
     DialogueCoordinator,
     DialogueSessionConfig,
 )
-from xsync_v2.domain import EvidenceCheck, EvidenceHealth, Lens
+from xsync_v2.domain import ConversationPhase, EvidenceCheck, EvidenceHealth, Lens
 from xsync_v2.event_codec import ActorKind, DialogueActor, sha256_digest
 from xsync_v2.host_context import (
     EvidenceContextClaim,
@@ -26,9 +26,11 @@ from xsync_v2.host_control import (
     HostWaitOutcome,
 )
 from xsync_v2.host_work import (
+    HostResultPublishRequest,
     HostWorkService,
     authoritative_work_snapshot,
 )
+from xsync_v2.host_result import TopicCandidatesResult
 from xsync_v2.lease_store import (
     ClaimRequest,
     CurrentRunnableWork,
@@ -53,6 +55,7 @@ def digest(label: str) -> str:
 
 
 RUNTIME = DialogueActor(ActorKind.RUNTIME, "runtime.host-control")
+HOST = DialogueActor(ActorKind.HOST, "host.host-control")
 
 
 class FakeClock:
@@ -187,6 +190,29 @@ class HostControlTest(unittest.TestCase):
         self.assertEqual(work.work_id, envelope.context.work_id)
         self.assertLessEqual(len(encode_host_context(envelope.context)), 16 * 1024)
         self.assertEqual([(work, envelope.lease)], self.provider.calls)
+
+    def test_strict_result_publish_delegates_to_the_shared_host_boundary(
+        self,
+    ) -> None:
+        work = self.current_work()
+        envelope = self.control.claim(self.claim_request(work))
+
+        outcome = self.control.publish_result(
+            HostResultPublishRequest(
+                "host-control-candidates",
+                envelope.work,
+                TopicCandidatesResult(("Registry fencing", "Lease recovery")),
+                self.config.created_at,
+                HOST,
+                envelope.fence,
+            )
+        )
+
+        self.assertIs(ConversationPhase.CHOOSING_TOPIC, outcome.state.phase)
+        self.assertEqual(
+            ("Registry fencing", "Lease recovery"),
+            outcome.state.candidates,
+        )
 
     def test_failed_claim_never_loads_context(self) -> None:
         work = self.current_work()
@@ -518,15 +544,15 @@ class HostControlTest(unittest.TestCase):
                     durable_poll_interval=interval,
                 )
 
-    def test_publish_is_a_thin_service_delegation(self) -> None:
+    def test_publish_result_is_a_thin_service_delegation(self) -> None:
         request = object()
         receipt = object()
         with mock.patch.object(
             self.service,
-            "publish",
+            "publish_result",
             return_value=receipt,
         ) as publish:
-            self.assertIs(receipt, self.control.publish(request))
+            self.assertIs(receipt, self.control.publish_result(request))
         publish.assert_called_once_with(request)
 
 if __name__ == "__main__":

@@ -16,13 +16,6 @@ from xsync_v2.browser_service import (
 )
 from xsync_v2.coordinator import DialogueSessionConfig
 from xsync_v2.domain import (
-    CommitAgentTurn,
-    DecisionContext,
-    EvidenceCheck,
-    EvidenceHealth,
-    PresentCandidates,
-    StartTopic,
-    TriggerBinding,
     TriggerKind,
 )
 from xsync_v2.evidence import (
@@ -32,9 +25,13 @@ from xsync_v2.evidence import (
 )
 from xsync_v2.host_context import HostContextError
 from xsync_v2.host_work import (
-    HostWorkPublishRequest,
+    HostResultPublishRequest,
     HostWorkServiceError,
-    host_command_id,
+)
+from xsync_v2.host_result import (
+    DialogueTurnResult,
+    TopicCandidatesResult,
+    TopicStartedResult,
 )
 from xsync_v2.event_codec import ActorKind, DialogueActor, sha256_digest
 from xsync_v2.lease_store import ClaimRequest
@@ -142,27 +139,12 @@ class RepositoryContextRuntimeTest(unittest.TestCase):
     def publish_candidates(self, envelope, suffix: str = ""):
         work = envelope.work
         key = f"publish-candidates{suffix}"
-        trigger = TriggerBinding(
-            work.kind,
-            work.trigger_work_id,
-            work.trigger_runtime_epoch,
-            work.parent_turn_id,
-            work.contract_digest,
-            work.input_digest,
-            work.evidence_digest,
-        )
-        return self.runtime.host.publish(
-            HostWorkPublishRequest(
+        return self.runtime.host.publish_result(
+            HostResultPublishRequest(
                 key,
                 work,
-                PresentCandidates(
-                    host_command_id(key),
+                TopicCandidatesResult(
                     ("Registry handoff", "Lease fencing"),
-                ),
-                DecisionContext(
-                    work.registry_generation,
-                    trigger,
-                    self.runtime.evidence.verify(self.config),
                 ),
                 self.config.created_at,
                 DialogueActor(ActorKind.HOST, "host.repository-context"),
@@ -233,33 +215,11 @@ class RepositoryContextRuntimeTest(unittest.TestCase):
             evidence_refs=("ev.registry-fence",),
             contract_digest=sha256_digest(b"registry-contract"),
         )
-        start_key = "start-registry-topic"
-        next_trigger = TriggerBinding(
-            TriggerKind.INITIAL_TURN,
-            "initial-topic-work",
-            self.config.runtime_epoch,
-            None,
-            topic_contract.contract_digest,
-            sha256_digest(b"initial-topic-input"),
-            self.config.evidence_digest,
-        )
-        self.runtime.host.publish(
-            HostWorkPublishRequest(
-                start_key,
+        self.runtime.host.publish_result(
+            HostResultPublishRequest(
+                "start-registry-topic",
                 selection.work,
-                StartTopic(
-                    host_command_id(start_key),
-                    topic_contract,
-                    "Registry handoff",
-                ),
-                DecisionContext(
-                    selection.work.registry_generation,
-                    next_trigger,
-                    EvidenceCheck(
-                        EvidenceHealth.CURRENT,
-                        self.config.evidence_digest,
-                    ),
-                ),
+                TopicStartedResult(topic_contract),
                 self.config.created_at,
                 DialogueActor(ActorKind.HOST, "host.repository-context"),
                 selection.fence,
@@ -279,28 +239,11 @@ class RepositoryContextRuntimeTest(unittest.TestCase):
             base_result,
             evidence_refs=("ev.registry-fence",),
         )
-        answer_key = "publish-opening-question"
-        answered = self.runtime.host.publish(
-            HostWorkPublishRequest(
-                answer_key,
+        answered = self.runtime.host.publish_result(
+            HostResultPublishRequest(
+                "publish-opening-question",
                 opening.work,
-                CommitAgentTurn(host_command_id(answer_key), result),
-                DecisionContext(
-                    opening.work.registry_generation,
-                    TriggerBinding(
-                        opening.work.kind,
-                        opening.work.trigger_work_id,
-                        opening.work.trigger_runtime_epoch,
-                        opening.work.parent_turn_id,
-                        opening.work.contract_digest,
-                        opening.work.input_digest,
-                        opening.work.evidence_digest,
-                    ),
-                    EvidenceCheck(
-                        EvidenceHealth.CURRENT,
-                        self.config.evidence_digest,
-                    ),
-                ),
+                DialogueTurnResult(result),
                 self.config.created_at,
                 DialogueActor(ActorKind.HOST, "host.repository-context"),
                 opening.fence,
@@ -342,33 +285,16 @@ class RepositoryContextRuntimeTest(unittest.TestCase):
         )
         self.assertIsNone(switched.state.active_topic)
         self.assertEqual(1, len(switched.state.paused_topics))
-        late_key = "late-old-topic-result"
         late_result = replace(
             agent_turn("q2"),
             evidence_refs=("ev.registry-fence",),
         )
         with self.assertRaisesRegex(HostWorkServiceError, "WORK_SUPERSEDED"):
-            self.runtime.host.publish(
-                HostWorkPublishRequest(
-                    late_key,
+            self.runtime.host.publish_result(
+                HostResultPublishRequest(
+                    "late-old-topic-result",
                     learner_reply.work,
-                    CommitAgentTurn(host_command_id(late_key), late_result),
-                    DecisionContext(
-                        learner_reply.work.registry_generation,
-                        TriggerBinding(
-                            learner_reply.work.kind,
-                            learner_reply.work.trigger_work_id,
-                            learner_reply.work.trigger_runtime_epoch,
-                            learner_reply.work.parent_turn_id,
-                            learner_reply.work.contract_digest,
-                            learner_reply.work.input_digest,
-                            learner_reply.work.evidence_digest,
-                        ),
-                        EvidenceCheck(
-                            EvidenceHealth.CURRENT,
-                            self.config.evidence_digest,
-                        ),
-                    ),
+                    DialogueTurnResult(late_result),
                     self.config.created_at,
                     DialogueActor(ActorKind.HOST, "host.repository-context"),
                     learner_reply.fence,

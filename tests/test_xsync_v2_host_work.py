@@ -41,12 +41,18 @@ from xsync_v2.domain import (
 )
 from xsync_v2.event_codec import ActorKind, DialogueActor, sha256_digest
 from xsync_v2.host_work import (
+    HostResultPublishRequest,
     HostWorkPublishRequest,
     HostWorkService,
     HostWorkServiceError,
     LeaseExhaustionRecordRequest,
     authoritative_work_snapshot,
     host_command_id,
+)
+from xsync_v2.host_result import (
+    DialogueTurnResult,
+    TopicCandidatesResult,
+    TopicStartedResult,
 )
 from xsync_v2.event_store import _DialogueTransactionLog
 from xsync_v2.lease_store import (
@@ -440,6 +446,141 @@ class HostWorkServiceTest(unittest.TestCase):
         with self.assertRaises(HostWorkServiceError) as raised:
             self.service.publish(changed)
         self.assertEqual("IDEMPOTENCY_CONFLICT", raised.exception.code)
+
+    def test_strict_result_publish_replays_before_evidence_or_lease_checks(
+        self,
+    ) -> None:
+        work, fence = self.bootstrap_candidates()
+        request = HostResultPublishRequest(
+            "strict-candidates-1",
+            work,
+            TopicCandidatesResult(("支付失败边界", "补偿落点")),
+            self.config.created_at,
+            HOST,
+            fence,
+        )
+        committed = self.service.publish_result(request)
+        self.coordinator.resolve(
+            replace(
+                self.config,
+                session_id="dlg-b",
+                created_at="2026-08-16T12:01:00+08:00",
+                runtime_epoch="trigger-epoch-b",
+            )
+        )
+        self.evidence_health = EvidenceHealth.STALE
+        self.clock.now = 2_000
+
+        with (
+            mock.patch.object(
+                self.coordinator,
+                "_verify_evidence",
+                wraps=self.coordinator._verify_evidence,
+            ) as evidence_check,
+            mock.patch.object(
+                self.leases,
+                "_marker_publication_guard",
+                wraps=self.leases._marker_publication_guard,
+            ) as lease_guard,
+        ):
+            replayed = self.service.publish_result(
+                replace(
+                    request,
+                    fence=replace(
+                        fence,
+                        lease_version=fence.lease_version + 9,
+                    ),
+                )
+            )
+        evidence_check.assert_not_called()
+        lease_guard.assert_not_called()
+        self.assertTrue(replayed.replayed)
+        self.assertEqual(committed.receipt, replayed.receipt)
+
+        with self.assertRaises(HostWorkServiceError) as raised:
+            self.service.publish_result(
+                replace(
+                    request,
+                    result=TopicCandidatesResult(("不同结果",)),
+                )
+            )
+        self.assertEqual("IDEMPOTENCY_CONFLICT", raised.exception.code)
+
+    def test_strict_topic_and_turn_results_derive_trusted_next_context(self) -> None:
+        candidate_work, candidate_fence = self.bootstrap_candidates()
+        candidates = self.service.publish_result(
+            HostResultPublishRequest(
+                "strict-candidates-2",
+                candidate_work,
+                TopicCandidatesResult(("支付失败边界", "补偿落点")),
+                self.config.created_at,
+                HOST,
+                candidate_fence,
+            )
+        )
+        selection_trigger = TriggerBinding(
+            TriggerKind.TOPIC_SELECTION,
+            "selection-trigger-strict",
+            self.config.runtime_epoch,
+            None,
+            None,
+            digest("selection-input-strict"),
+            self.config.evidence_digest,
+        )
+        self.coordinator.execute(
+            DialogueExecutionRequest(
+                "dlg-a",
+                candidates.state.conversation_version,
+                SelectTopic("select-strict-topic", "支付失败边界"),
+                DecisionContext(
+                    1,
+                    selection_trigger,
+                    EvidenceCheck(
+                        EvidenceHealth.CURRENT,
+                        self.config.evidence_digest,
+                    ),
+                ),
+                self.config.created_at,
+                LEARNER,
+            )
+        )
+        selection_work = self.current_work()
+        selection_fence = self.claim(selection_work, "strict-selection")
+        started = self.service.publish_result(
+            HostResultPublishRequest(
+                "strict-topic-start",
+                selection_work,
+                TopicStartedResult(contract()),
+                self.config.created_at,
+                HOST,
+                selection_fence,
+            )
+        )
+
+        started_payload = started.events[-1].payload
+        self.assertIs(type(started_payload), TopicStarted)
+        assert isinstance(started_payload, TopicStarted)
+        self.assertEqual("支付失败边界", started_payload.selected_candidate)
+        self.assertRegex(started_payload.initial_trigger.work_id, r"^work\.initial\.")
+        self.assertEqual(
+            self.config.runtime_epoch,
+            started_payload.initial_trigger.runtime_epoch,
+        )
+
+        turn_work = self.current_work()
+        turn_fence = self.claim(turn_work, "strict-turn")
+        turn = self.service.publish_result(
+            HostResultPublishRequest(
+                "strict-turn-publish",
+                turn_work,
+                DialogueTurnResult(agent_turn()),
+                self.config.created_at,
+                HOST,
+                turn_fence,
+            )
+        )
+        self.assertEqual(ConversationPhase.AWAITING_USER, turn.state.phase)
+        self.assertEqual(1, len(turn.events))
 
     def test_receipt_replays_after_session_deactivation_and_lease_expiry(self) -> None:
         work, fence = self.bootstrap_candidates()

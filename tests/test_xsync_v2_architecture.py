@@ -78,6 +78,7 @@ from xsync_v2.host_result import (
     host_result_command,
 )
 from xsync_v2.host_work import (
+    HostResultPublishRequest,
     HostWorkPublishRequest,
     HostWorkService,
     LeaseExhaustionRecordRequest,
@@ -225,9 +226,11 @@ class ArchitectureTest(unittest.TestCase):
             CurrentWorkObservation,
             LeaseExhaustionProof,
             HostWorkPublishRequest,
+            HostResultPublishRequest,
             LeaseExhaustionRecordRequest,
             HostWorkService,
             HostWorkService.publish,
+            HostWorkService.publish_result,
             HostWorkService.record_lease_exhaustion,
             authoritative_work_snapshot,
             host_command_id,
@@ -251,7 +254,7 @@ class ArchitectureTest(unittest.TestCase):
             HostControl.claim,
             HostControl.renew,
             HostControl.reclaim,
-            HostControl.publish,
+            HostControl.publish_result,
             HostResultError,
             HostResultKind,
             TopicCandidatesResult,
@@ -331,6 +334,7 @@ class ArchitectureTest(unittest.TestCase):
     def test_raw_transaction_logs_are_not_public_write_apis(self):
         self.assertFalse(hasattr(event_store, "DialogueTransactionLog"))
         self.assertFalse(hasattr(registry_store, "RegistryTransactionLog"))
+        self.assertFalse(hasattr(HostControl, "publish"))
 
     def test_runtime_core_is_host_neutral(self):
         forbidden = ("anthropic", "claude", "codex", "openai")

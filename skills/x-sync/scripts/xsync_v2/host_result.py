@@ -26,12 +26,12 @@ from .domain import (
     WorkFailureCategory,
 )
 from .event_codec import (
+    PROTOCOL_VERSION,
     canonical_json_bytes,
     decode_host_domain_value,
     encode_host_domain_value,
     sha256_digest,
 )
-from .host_work import HostWorkCommand, HostWorkServiceError, host_command_id
 from .work import RunnableWork, WorkError, validate_runnable_work
 from .work_identity import is_protocol_id, is_sha256_digest
 
@@ -100,6 +100,28 @@ HostResult: TypeAlias = (
     | DialogueTurnResult
     | WorkFailureResult
 )
+HostResultCommand: TypeAlias = (
+    PresentCandidates | StartTopic | CommitAgentTurn | ReportWorkFailure
+)
+
+
+def host_command_id(idempotency_key: str) -> str:
+    """Derive the sole Host command id for one stable idempotency key."""
+    if not is_protocol_id(idempotency_key):
+        raise HostResultError("INVALID_IDEMPOTENCY_KEY")
+    digest = sha256_digest(
+        canonical_json_bytes(
+            {
+                "protocol_version": PROTOCOL_VERSION,
+                "record_type": "host_command_identity",
+                "idempotency_key": idempotency_key,
+            }
+        )
+    )
+    command_id = f"host.command.{digest.removeprefix('sha256:')[:48]}"
+    if not is_protocol_id(command_id):
+        raise HostResultError("IDENTITY_DERIVATION_FAILED")
+    return command_id
 
 
 def _object_pairs(pairs: list[tuple[str, object]]) -> dict[str, object]:
@@ -255,12 +277,12 @@ def host_result_command(
     idempotency_key: str,
     work: RunnableWork,
     selected_candidate: str | None = None,
-) -> HostWorkCommand:
+) -> HostResultCommand:
     """Map a validated result to one command for the matching durable work."""
     try:
         work = validate_runnable_work(work)
         command_id = host_command_id(idempotency_key)
-    except (HostWorkServiceError, WorkError, ValueError) as exc:
+    except (HostResultError, WorkError, ValueError) as exc:
         code = getattr(exc, "code", "HOST_RESULT_WORK_MISMATCH")
         raise HostResultError(code) from exc
     if type(result) is TopicCandidatesResult:
@@ -304,5 +326,6 @@ __all__ = [
     "WorkFailureResult",
     "decode_host_result",
     "encode_host_result",
+    "host_command_id",
     "host_result_command",
 ]
