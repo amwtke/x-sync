@@ -5,9 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import math
+from pathlib import Path
 import threading
 from typing import cast
-from urllib.parse import urlsplit
+from urllib.parse import SplitResult, quote, urlsplit
 
 from .browser_http import (
     MAX_HTTP_BODY_BYTES,
@@ -60,6 +61,36 @@ class _HttpServer(ThreadingHTTPServer):
     stopping: threading.Event
     active_streams: set[BrowserSseStream]
     active_streams_lock: threading.Lock
+    assets: dict[str, tuple[str, bytes]]
+    expected_host: str
+    expected_origin: str
+
+
+_CONTENT_SECURITY_POLICY = (
+    "default-src 'none'; script-src 'self'; style-src 'self'; "
+    "connect-src 'self'; base-uri 'none'; form-action 'self'; "
+    "frame-ancestors 'none'"
+)
+_ASSET_PATHS = {
+    "/": ("dialogue.html", "text/html; charset=utf-8"),
+    "/dialogue.css": ("dialogue.css", "text/css; charset=utf-8"),
+    "/dialogue.js": ("dialogue.js", "text/javascript; charset=utf-8"),
+}
+_MAX_ASSET_BYTES = 512 * 1024
+
+
+def _load_browser_assets() -> dict[str, tuple[str, bytes]]:
+    asset_root = Path(__file__).resolve().parents[2] / "assets"
+    loaded: dict[str, tuple[str, bytes]] = {}
+    for route, (name, content_type) in _ASSET_PATHS.items():
+        try:
+            raw = (asset_root / name).read_bytes()
+        except OSError as exc:
+            raise BrowserServerError("BROWSER_ASSET_UNAVAILABLE") from exc
+        if not raw or len(raw) > _MAX_ASSET_BYTES:
+            raise BrowserServerError("BROWSER_ASSET_INVALID")
+        loaded[route] = (content_type, raw)
+    return loaded
 
 
 class _RequestHandler(BaseHTTPRequestHandler):
@@ -87,6 +118,9 @@ class _RequestHandler(BaseHTTPRequestHandler):
             return
         request = cast(BrowserHttpRequest, request)
         parsed = urlsplit(request.target)
+        if request.method == "GET" and parsed.path in self._runtime.assets:
+            self._write_response(self._static_response(request, parsed))
+            return
         if request.method == "GET" and parsed.path == "/api/v2/stream":
             try:
                 stream = self._runtime.api.open_stream(request)
@@ -101,6 +135,39 @@ class _RequestHandler(BaseHTTPRequestHandler):
             self._write_live_stream(stream)
             return
         self._write_response(self._runtime.api.handle(request))
+
+    def _static_response(
+        self,
+        request: BrowserHttpRequest,
+        parsed: SplitResult,
+    ) -> BrowserHttpResponse:
+        if request.body or parsed.query or parsed.fragment:
+            return self._runtime.api.error_response("VALIDATION_FAILED")
+        if self.headers.get("Host") != self._runtime.expected_host:
+            return self._runtime.api.error_response("BAD_HOST")
+        origin = self.headers.get("Origin")
+        if origin is not None and origin != self._runtime.expected_origin:
+            return self._runtime.api.error_response("BAD_ORIGIN")
+        if origin is None and self.headers.get("Sec-Fetch-Site") not in {
+            None,
+            "same-origin",
+            "none",
+        }:
+            return self._runtime.api.error_response("BAD_ORIGIN")
+        content_type, body = self._runtime.assets[parsed.path]
+        return BrowserHttpResponse(
+            200,
+            (
+                ("Content-Type", content_type),
+                ("Content-Length", str(len(body))),
+                ("Cache-Control", "no-store"),
+                ("Content-Security-Policy", _CONTENT_SECURITY_POLICY),
+                ("Referrer-Policy", "no-referrer"),
+                ("X-Content-Type-Options", "nosniff"),
+                ("X-Frame-Options", "DENY"),
+            ),
+            body,
+        )
 
     def _read_request(self) -> BrowserHttpRequest | BrowserHttpResponse:
         api = self._runtime.api
@@ -209,6 +276,7 @@ class LoopbackBrowserServer:
             ) from exc
         if not math.isfinite(keepalive) or not 0.01 <= keepalive <= 60.0:
             raise BrowserServerError("INVALID_BROWSER_SERVER_CONFIGURATION")
+        assets = _load_browser_assets()
         try:
             httpd = _HttpServer(("127.0.0.1", port), _RequestHandler)
         except OSError as exc:
@@ -232,8 +300,12 @@ class LoopbackBrowserServer:
         httpd.stopping = threading.Event()
         httpd.active_streams = set()
         httpd.active_streams_lock = threading.Lock()
+        httpd.assets = assets
+        httpd.expected_host = address.authority
+        httpd.expected_origin = address.origin
         self._httpd = httpd
         self._address = address
+        self._launch_url = f"{address.origin}/#{quote(capability, safe='')}"
         self._thread: threading.Thread | None = None
         self._lifecycle_lock = threading.Lock()
         self._closed = False
@@ -242,6 +314,11 @@ class LoopbackBrowserServer:
     def address(self) -> BrowserServerAddress:
         """Return the bound loopback host and ephemeral or requested port."""
         return self._address
+
+    @property
+    def launch_url(self) -> str:
+        """Return the fragment-authenticated URL to open in the owner Browser."""
+        return self._launch_url
 
     def start(self) -> LoopbackBrowserServer:
         """Start one daemon transport thread; repeated starts fail closed."""

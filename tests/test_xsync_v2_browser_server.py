@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import http.client
 import json
+from pathlib import Path
 import socket
 import unittest
 
@@ -88,6 +89,72 @@ class LoopbackBrowserServerTest(unittest.TestCase):
         denied.close()
         self.assertEqual(401, denied_response.status)
         self.assertNotIn(b"server-secret", denied_body)
+
+    def test_serves_fragment_authenticated_app_with_strict_browser_headers(
+        self,
+    ) -> None:
+        self.assertEqual(
+            f"{self.server.address.origin}/#server-secret",
+            self.server.launch_url,
+        )
+        for path, content_type in (
+            ("/", "text/html; charset=utf-8"),
+            ("/dialogue.css", "text/css; charset=utf-8"),
+            ("/dialogue.js", "text/javascript; charset=utf-8"),
+        ):
+            with self.subTest(path=path):
+                connection = self.connection()
+                connection.request(
+                    "GET",
+                    path,
+                    headers={
+                        "Host": self.server.address.authority,
+                        "Sec-Fetch-Site": "none",
+                    },
+                )
+                response = connection.getresponse()
+                body = response.read()
+                connection.close()
+                self.assertEqual(200, response.status)
+                self.assertEqual(content_type, response.getheader("Content-Type"))
+                self.assertEqual("no-store", response.getheader("Cache-Control"))
+                self.assertEqual("no-referrer", response.getheader("Referrer-Policy"))
+                self.assertIn(
+                    "default-src 'none'",
+                    response.getheader("Content-Security-Policy"),
+                )
+                self.assertNotIn(b"server-secret", body)
+
+        connection = self.connection()
+        connection.request(
+            "GET",
+            "/",
+            headers={"Host": "attacker.invalid"},
+        )
+        denied = connection.getresponse()
+        denied.read()
+        connection.close()
+        self.assertEqual(403, denied.status)
+
+    def test_dialogue_assets_keep_data_in_text_content_and_bearer_fetch(self) -> None:
+        asset_root = (
+            Path(__file__).resolve().parents[1]
+            / "skills"
+            / "x-sync"
+            / "assets"
+        )
+        html = (asset_root / "dialogue.html").read_text(encoding="utf-8")
+        javascript = (asset_root / "dialogue.js").read_text(encoding="utf-8")
+
+        self.assertIn('<script src="/dialogue.js" defer></script>', html)
+        self.assertNotIn("<script>", html)
+        self.assertIn(
+            'headers.set("Authorization", `Bearer ${capability}`)',
+            javascript,
+        )
+        self.assertIn("/api/v2/stream?after=", javascript)
+        self.assertNotIn("EventSource", javascript)
+        self.assertNotIn("innerHTML", javascript)
 
     def test_post_turn_uses_the_same_typed_browser_service(self) -> None:
         body = json.dumps(

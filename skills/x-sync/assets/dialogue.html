@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="zh-Hans">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>X-Sync 对话</title>
+  <link rel="stylesheet" href="/dialogue.css">
+</head>
+<body>
+  <main class="shell">
+    <header class="masthead">
+      <div>
+        <p class="eyebrow">Repository-grounded dialogue</p>
+        <h1>X-Sync</h1>
+      </div>
+      <p id="connection" class="connection" aria-live="polite">正在连接…</p>
+    </header>
+
+    <section id="error" class="notice error" role="alert" hidden></section>
+
+    <section id="candidates" class="panel" hidden>
+      <p class="step">选择一个现在值得聊的话题</p>
+      <h2>从仓库证据出发</h2>
+      <div id="candidate-list" class="candidate-list"></div>
+    </section>
+
+    <section id="waiting" class="panel waiting" hidden>
+      <div class="pulse" aria-hidden="true"></div>
+      <div>
+        <p class="step">Host 正在准备下一步</p>
+        <h2 id="waiting-title">正在读取相关证据…</h2>
+        <p id="selected-candidate" class="muted"></p>
+      </div>
+    </section>
+
+    <section id="topic" class="panel" hidden>
+      <div class="topic-heading">
+        <div>
+          <p id="topic-lens" class="pill"></p>
+          <h2 id="topic-title"></h2>
+          <p id="topic-objective" class="muted"></p>
+        </div>
+        <button id="pause" class="quiet" type="button" hidden>暂停话题</button>
+      </div>
+      <p id="guiding-question" class="guiding"></p>
+
+      <article id="question" class="question" hidden>
+        <p id="heard" class="heard"></p>
+        <p id="one-step" class="one-step"></p>
+        <h3 id="question-text"></h3>
+        <form id="answer-form">
+          <label for="answer">你的判断</label>
+          <textarea id="answer" rows="5" maxlength="32000" required></textarea>
+          <button class="primary" type="submit">提交并继续</button>
+        </form>
+      </article>
+    </section>
+
+    <section id="paused" class="panel" hidden>
+      <p class="step">已暂停的话题</p>
+      <div id="paused-list" class="paused-list"></div>
+    </section>
+
+    <section id="recoverable" class="notice" hidden>
+      当前工作已停止自动重试。请从 Host 控制面选择安全恢复动作。
+    </section>
+  </main>
+  <script src="/dialogue.js" defer></script>
+</body>
+</html>

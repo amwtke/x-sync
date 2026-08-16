@@ -20,6 +20,7 @@ from xsync_v2.browser_service import (
     PauseTopicIntent,
     RecoverWorkIntent,
     ResumeTopicIntent,
+    SelectTopicIntent,
     SubmitTurnIntent,
 )
 from xsync_v2.coordinator import (
@@ -224,6 +225,7 @@ class ArchitectureTest(unittest.TestCase):
             HostControl.publish,
             BrowserCommandRequest,
             SubmitTurnIntent,
+            SelectTopicIntent,
             PauseTopicIntent,
             ResumeTopicIntent,
             RecoverWorkIntent,
@@ -244,6 +246,7 @@ class ArchitectureTest(unittest.TestCase):
             BrowserServerAddress.authority,
             BrowserServerAddress.origin,
             LoopbackBrowserServer,
+            LoopbackBrowserServer.launch_url,
             LoopbackBrowserServer.start,
             LoopbackBrowserServer.close,
             PublicStreamObserver,
