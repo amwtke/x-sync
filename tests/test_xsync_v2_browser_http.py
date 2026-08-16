@@ -37,6 +37,7 @@ from xsync_v2.domain import (
     PauseTopic,
     QuestionIntent,
     RecoverWork,
+    RequestHelp,
     ResumeTopic,
     SelectTopic,
     SetLens,
@@ -200,7 +201,7 @@ class BrowserHttpTest(unittest.TestCase):
         self.assertEqual("awaiting_user", payload["phase"])
         self.assertEqual("question-1", payload["topic"]["question"]["id"])
         self.assertEqual(
-            ["pause", "set_lens", "submit_turn", "switch"],
+            ["help", "pause", "set_lens", "submit_turn", "switch"],
             payload["allowed_actions"],
         )
         rendered = response.body.decode()
@@ -272,6 +273,11 @@ class BrowserHttpTest(unittest.TestCase):
                 SetLens,
             ),
             (
+                {"action": "help", "question_id": "question-1"},
+                "help-key",
+                RequestHelp,
+            ),
+            (
                 {"action": "resume", "topic_run_id": "topic-1"},
                 "resume-key",
                 ResumeTopic,
@@ -340,6 +346,13 @@ class BrowserHttpTest(unittest.TestCase):
                     type(self.coordinator.requests[-1].command),
                     expected_type,
                 )
+                if type(self.coordinator.requests[-1].command) is RequestHelp:
+                    execution = self.coordinator.requests[-1]
+                    self.assertIs(TriggerKind.HELP, execution.context.trigger.kind)
+                    self.assertEqual(
+                        "question-1",
+                        execution.context.trigger.parent_turn_id,
+                    )
 
         self.coordinator.state = replace(
             state(),

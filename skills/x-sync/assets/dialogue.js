@@ -162,6 +162,13 @@
     byId("heard").textContent = question.heard;
     byId("one-step").textContent = question.one_step_further;
     byId("question-text").textContent = question.text;
+    const help = byId("help");
+    help.hidden = !state.allowed_actions.includes("help");
+    help.onclick = () => mutate(
+      "/api/v2/topic",
+      { action: "help", question_id: question.id },
+      "help",
+    );
     byId("answer-form").onsubmit = (event) => {
       event.preventDefault();
       const answer = byId("answer");

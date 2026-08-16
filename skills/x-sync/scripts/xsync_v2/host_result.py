@@ -41,6 +41,7 @@ _MAX_TEXT_BYTES = 32 * 1024
 _DIALOGUE_WORK_KINDS = frozenset(
     {
         TriggerKind.INITIAL_TURN,
+        TriggerKind.HELP,
         TriggerKind.LEARNER_REPLY,
         TriggerKind.LENS_CHANGED,
         TriggerKind.REGROUND,

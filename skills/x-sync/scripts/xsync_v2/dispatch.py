@@ -11,6 +11,7 @@ from .domain import (
     AgentTurnCommitted,
     CandidatesPresented,
     CommittedDialogueEvent,
+    HelpRequested,
     LearnerTurnSubmitted,
     LensChanged,
     SessionDeactivationPrepared,
@@ -237,6 +238,14 @@ def _dialogue_payload_view(event: CommittedDialogueEvent) -> ImmutablePayloadVie
             (
                 ("topic_run_id", payload.topic_run_id),
                 ("lens", payload.lens.value),
+            ),
+        )
+    if type(payload) is HelpRequested:
+        return ImmutablePayloadView(
+            "help_requested",
+            _fields(
+                ("topic_run_id", payload.topic_run_id),
+                ("question_id", payload.question_id),
             ),
         )
     if type(payload) is TopicPaused:

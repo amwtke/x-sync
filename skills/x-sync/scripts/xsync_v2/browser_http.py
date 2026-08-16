@@ -22,6 +22,7 @@ from .browser_service import (
     CustomTopicIntent,
     PauseTopicIntent,
     RecoverWorkIntent,
+    RequestHelpIntent,
     ResumeTopicIntent,
     SelectTopicIntent,
     SetLensIntent,
@@ -227,6 +228,7 @@ def _allowed_actions(state: DialogueState) -> tuple[str, ...]:
         actions.add("set_lens")
         actions.add("switch")
     if state.phase is ConversationPhase.AWAITING_USER:
+        actions.add("help")
         actions.add("submit_turn")
     if state.phase is ConversationPhase.CHOOSING_TOPIC:
         actions.add("custom_topic")
@@ -587,6 +589,11 @@ class BrowserApi:
                 return SetLensIntent(Lens(lens))
             except ValueError as exc:
                 raise BrowserApiError("VALIDATION_FAILED") from exc
+        if action == "help" and set(body) == {"action", "question_id"}:
+            question_id = body["question_id"]
+            if type(question_id) is not str:
+                raise BrowserApiError("VALIDATION_FAILED")
+            return RequestHelpIntent(question_id)
         if action == "pause" and set(body) == {"action"}:
             return PauseTopicIntent()
         if action == "switch" and set(body) == {"action"}:

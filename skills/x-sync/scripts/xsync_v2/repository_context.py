@@ -9,6 +9,7 @@ from .domain import (
     EvidenceHealth,
     GateAssessment,
     GateStatus,
+    HelpRequested,
     LearnerModelEntry,
     LearnerTurnSubmitted,
     Lens,
@@ -67,6 +68,35 @@ def _previous_question_from_events(
     if len(agent_events) != 1:
         raise HostContextError("HOST_CONTEXT_STATE_INVALID")
     return agent_events[0].result.question
+
+
+def _help_question_from_events(
+    events: tuple[CommittedDialogueEvent, ...],
+    trigger_sequence: int,
+    question_id: str | None,
+) -> str:
+    if question_id is None:
+        raise HostContextError("HOST_CONTEXT_STATE_INVALID")
+    help_events = tuple(
+        event
+        for event in events
+        if event.sequence == trigger_sequence
+        and type(event.payload) is HelpRequested
+        and event.payload.question_id == question_id
+        and event.payload.next_trigger.parent_turn_id == question_id
+    )
+    if len(help_events) != 1:
+        raise HostContextError("HOST_CONTEXT_STATE_INVALID")
+    questions = tuple(
+        event.payload.result.question
+        for event in events
+        if event.sequence < trigger_sequence
+        and type(event.payload) is AgentTurnCommitted
+        and event.payload.result.question_id == question_id
+    )
+    if len(questions) != 1:
+        raise HostContextError("HOST_CONTEXT_STATE_INVALID")
+    return questions[0]
 
 
 class RepositoryHostContextProvider:
@@ -214,11 +244,19 @@ class RepositoryHostContextProvider:
                 topic.current_agent_turn.question
                 if topic.current_agent_turn is not None
                 else (
-                    None
-                    if topic.last_learner_turn_id is None
-                    else _previous_question_from_events(
+                    _help_question_from_events(
                         events,
-                        topic.last_learner_turn_id,
+                        work.observed_sequence,
+                        work.parent_turn_id,
+                    )
+                    if work.kind is TriggerKind.HELP
+                    else (
+                        None
+                        if topic.last_learner_turn_id is None
+                        else _previous_question_from_events(
+                            events,
+                            topic.last_learner_turn_id,
+                        )
                     )
                 )
             )
@@ -234,9 +272,13 @@ class RepositoryHostContextProvider:
                     unsupported = gate.gate_id.value
                     break
             priority_gap = (
-                "Connect the current learner model to repository evidence."
-                if unsupported is None
-                else f"The {unsupported} gate still needs direct support."
+                "Give the smallest useful hint, then keep one answerable question."
+                if work.kind is TriggerKind.HELP
+                else (
+                    "Connect the current learner model to repository evidence."
+                    if unsupported is None
+                    else f"The {unsupported} gate still needs direct support."
+                )
             )
 
         selected_candidate = (

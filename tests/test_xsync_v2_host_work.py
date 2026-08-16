@@ -10,6 +10,7 @@ from xsync_v2.browser_service import (
     AnswerTopicClarificationIntent,
     BrowserCommandRequest,
     BrowserCommandService,
+    RequestHelpIntent,
     SelectTopicIntent,
     SetLensIntent,
 )
@@ -288,6 +289,57 @@ class HostWorkServiceTest(unittest.TestCase):
         self.assertIs(ConversationPhase.AWAITING_USER, continued.state.phase)
         assert continued.state.active_topic is not None
         self.assertIs(Lens.TECHNICAL, continued.state.active_topic.lens)
+
+    def test_help_request_is_a_fresh_lease_fenced_dialogue_work(self) -> None:
+        opening_work, opening_fence = self.start_topic()
+        opening = self.service.publish_result(
+            HostResultPublishRequest(
+                "opening-before-help",
+                opening_work,
+                DialogueTurnResult(agent_turn()),
+                self.config.created_at,
+                HOST,
+                opening_fence,
+            )
+        )
+        browser = BrowserCommandService(
+            self.coordinator,
+            lambda item: EvidenceCheck(
+                EvidenceHealth.CURRENT,
+                item.evidence_digest,
+            ),
+            clock=lambda: self.config.created_at,
+        )
+        requested = browser.execute(
+            BrowserCommandRequest(
+                "dlg-a",
+                "help-for-opening",
+                opening.state.conversation_version,
+                RequestHelpIntent("q1"),
+            )
+        )
+        self.assertIs(ConversationPhase.WAITING_HOST, requested.state.phase)
+        help_work = self.current_work()
+        self.assertIs(TriggerKind.HELP, help_work.kind)
+        self.assertEqual("q1", help_work.parent_turn_id)
+        help_fence = self.claim(help_work, "help")
+
+        continued = self.service.publish_result(
+            HostResultPublishRequest(
+                "hinted-turn",
+                help_work,
+                DialogueTurnResult(agent_turn("q-after-help")),
+                self.config.created_at,
+                HOST,
+                help_fence,
+            )
+        )
+        self.assertIs(ConversationPhase.AWAITING_USER, continued.state.phase)
+        assert continued.state.active_topic is not None
+        self.assertEqual(
+            "q-after-help",
+            continued.state.active_topic.open_question_id,
+        )
 
     def setUp(self) -> None:
         self.temporary = TemporaryDirectory()

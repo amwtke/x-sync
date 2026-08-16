@@ -10,6 +10,7 @@ import tests.xsync_v2_path  # noqa: F401
 from tests.test_xsync_v2_state_machine import agent_turn, contract
 from xsync_v2.browser_service import (
     BrowserCommandRequest,
+    RequestHelpIntent,
     SelectTopicIntent,
     SubmitTurnIntent,
     SwitchTopicIntent,
@@ -249,19 +250,54 @@ class RepositoryContextRuntimeTest(unittest.TestCase):
                 opening.fence,
             )
         )
+        requested_help = self.runtime.browser.execute(
+            BrowserCommandRequest(
+                "session-1",
+                "help-question-1",
+                answered.state.conversation_version,
+                RequestHelpIntent(result.question_id),
+                "learner-1",
+            )
+        )
+        help_work = self.claim_current("help")
+        self.assertIs(TriggerKind.HELP, help_work.work.kind)
+        self.assertEqual(result.question, help_work.context.previous_question)
+        self.assertIn("smallest useful hint", help_work.context.priority_gap)
+        helped_result = replace(
+            agent_turn("q-after-help"),
+            heard="A small hint: inspect which marker wins the race.",
+            evidence_refs=("ev.registry-fence",),
+        )
+        helped = self.runtime.host.publish_result(
+            HostResultPublishRequest(
+                "publish-helped-question",
+                help_work.work,
+                DialogueTurnResult(helped_result),
+                self.config.created_at,
+                DialogueActor(ActorKind.HOST, "host.repository-context"),
+                help_work.fence,
+            )
+        )
+        self.assertGreater(helped.state.sequence, requested_help.state.sequence)
         submitted = self.runtime.browser.execute(
             BrowserCommandRequest(
                 "session-1",
                 "answer-question-1",
-                answered.state.conversation_version,
-                SubmitTurnIntent(result.question_id, "The registry fence wins first."),
+                helped.state.conversation_version,
+                SubmitTurnIntent(
+                    helped_result.question_id,
+                    "The registry fence wins first.",
+                ),
                 "learner-1",
             )
         )
 
         learner_reply = self.claim_current("learner-reply")
 
-        self.assertEqual(result.question, learner_reply.context.previous_question)
+        self.assertEqual(
+            helped_result.question,
+            learner_reply.context.previous_question,
+        )
         self.assertIsNotNone(learner_reply.context.learner_turn)
         assert learner_reply.context.learner_turn is not None
         self.assertEqual(

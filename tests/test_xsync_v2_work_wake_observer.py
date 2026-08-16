@@ -94,6 +94,7 @@ class WorkWakeObserverTest(unittest.TestCase):
             "topic_started",
             "learner_turn_submitted",
             "lens_changed",
+            "help_requested",
             "topic_resumed",
             "topic_switch_requested",
             "work_requeued",

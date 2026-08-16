@@ -31,6 +31,7 @@ from .domain import (
     Lens,
     PauseTopic,
     RecoverWork,
+    RequestHelp,
     ResumeTopic,
     SelectTopic,
     SetLens,
@@ -110,6 +111,13 @@ class SetLensIntent:
 
 
 @dataclass(frozen=True, slots=True)
+class RequestHelpIntent:
+    """Learner request for a minimal hint on the visible question."""
+
+    question_id: str
+
+
+@dataclass(frozen=True, slots=True)
 class PauseTopicIntent:
     """Learner request to pause the current Topic Run."""
 
@@ -140,6 +148,7 @@ BrowserIntent: TypeAlias = (
     | CustomTopicIntent
     | AnswerTopicClarificationIntent
     | SetLensIntent
+    | RequestHelpIntent
     | PauseTopicIntent
     | SwitchTopicIntent
     | ResumeTopicIntent
@@ -315,6 +324,7 @@ class BrowserCommandService:
                 CustomTopicIntent,
                 AnswerTopicClarificationIntent,
                 SetLensIntent,
+                RequestHelpIntent,
                 PauseTopicIntent,
                 SwitchTopicIntent,
                 ResumeTopicIntent,
@@ -334,6 +344,8 @@ class BrowserCommandService:
             valid = is_protocol_id(intent.question_id) and _valid_text(intent.answer)
         elif type(intent) is SetLensIntent:
             valid = type(intent.lens) is Lens
+        elif type(intent) is RequestHelpIntent:
+            valid = is_protocol_id(intent.question_id)
         elif type(intent) is ResumeTopicIntent:
             valid = is_protocol_id(intent.topic_run_id)
         elif type(intent) is RecoverWorkIntent:
@@ -396,6 +408,8 @@ class BrowserCommandService:
             )
         if type(intent) is SetLensIntent:
             return SetLens(command_id, intent.lens)
+        if type(intent) is RequestHelpIntent:
+            return RequestHelp(command_id, intent.question_id)
         if type(intent) is PauseTopicIntent:
             return PauseTopic(command_id)
         if type(intent) is SwitchTopicIntent:
@@ -441,6 +455,11 @@ class BrowserCommandService:
             intent_tree = {
                 "type": "set_lens",
                 "lens": intent.lens.value,
+            }
+        elif type(intent) is RequestHelpIntent:
+            intent_tree = {
+                "type": "request_help",
+                "question_id": intent.question_id,
             }
         elif type(intent) is PauseTopicIntent:
             intent_tree = {"type": "pause_topic"}
@@ -507,6 +526,19 @@ class BrowserCommandService:
                 work_id,
                 config.runtime_epoch,
                 parent_turn_id,
+                topic.contract.contract_digest,
+                input_digest,
+                evidence.evidence_digest,
+            )
+        elif type(intent) is RequestHelpIntent:
+            topic = state.active_topic
+            if topic is None or topic.current_agent_turn is None:
+                raise BrowserServiceError("TOPIC_STATE_CONFLICT")
+            trigger = TriggerBinding(
+                TriggerKind.HELP,
+                work_id,
+                config.runtime_epoch,
+                intent.question_id,
                 topic.contract.contract_digest,
                 input_digest,
                 evidence.evidence_digest,
@@ -615,6 +647,7 @@ __all__ = [
     "CustomTopicIntent",
     "PauseTopicIntent",
     "RecoverWorkIntent",
+    "RequestHelpIntent",
     "ResumeTopicIntent",
     "SelectTopicIntent",
     "SetLensIntent",

@@ -220,6 +220,39 @@ class PublicStreamObserverTest(unittest.TestCase):
         )
         self.assertNotIn("answer-secret", repr((requested, answered)))
 
+    def test_help_request_exposes_only_question_identity(self) -> None:
+        observer = PublicStreamObserver(
+            retention_limit=8,
+            subscriber_queue_limit=8,
+        )
+        subscription = observer.subscribe("session-1", after_sequence=0)
+        observer.on_batch(
+            batch(
+                event(
+                    "event-help",
+                    1,
+                    tag="help_requested",
+                    fields=(
+                        ("topic_run_id", "topic-1"),
+                        ("question_id", "question-1"),
+                        ("work_id", "work-secret"),
+                        ("evidence_digest", "sha256:secret"),
+                    ),
+                )
+            )
+        )
+
+        (projected,) = subscription.read_available()
+        self.assertEqual("help_requested", projected.event_type)
+        self.assertEqual(
+            (
+                ("topic_run_id", "topic-1"),
+                ("question_id", "question-1"),
+            ),
+            projected.fields,
+        )
+        self.assertNotIn("secret", repr(projected))
+
     def test_failure_lifecycle_is_contiguous_and_fail_closed(self) -> None:
         observer = PublicStreamObserver(
             retention_limit=8,

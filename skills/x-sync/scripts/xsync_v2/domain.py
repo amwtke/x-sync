@@ -95,6 +95,7 @@ class TriggerKind(StrEnum):
     TOPIC_SELECTION = "topic_selection"
     INITIAL_TURN = "initial_turn"
     LEARNER_REPLY = "learner_reply"
+    HELP = "help"
     LENS_CHANGED = "lens_changed"
     REGROUND = "reground"
 
@@ -365,6 +366,14 @@ class SetLens:
 
 
 @dataclass(frozen=True, slots=True)
+class RequestHelp:
+    """Ask for a minimal hint on the current visible question."""
+
+    command_id: str
+    question_id: str
+
+
+@dataclass(frozen=True, slots=True)
 class StartTopic:
     command_id: str
     contract: TopicContract
@@ -442,6 +451,7 @@ DialogueCommand: TypeAlias = (
     | RequestTopicClarification
     | AnswerTopicClarification
     | SetLens
+    | RequestHelp
     | StartTopic
     | CommitAgentTurn
     | SubmitLearnerTurn
@@ -496,6 +506,15 @@ class LensChanged:
 
     topic_run_id: str
     lens: Lens
+    next_trigger: TriggerBinding
+
+
+@dataclass(frozen=True, slots=True)
+class HelpRequested:
+    """Learner help request which creates one durable Host work item."""
+
+    topic_run_id: str
+    question_id: str
     next_trigger: TriggerBinding
 
 
@@ -604,6 +623,7 @@ DialogueEventPayload: TypeAlias = (
     | TopicClarificationRequested
     | TopicClarificationAnswered
     | LensChanged
+    | HelpRequested
     | TopicStarted
     | AgentTurnCommitted
     | LearnerTurnSubmitted

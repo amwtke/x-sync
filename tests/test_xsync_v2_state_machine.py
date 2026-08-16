@@ -26,6 +26,7 @@ from xsync_v2.domain import (
     GateId,
     GateRequirement,
     GateStatus,
+    HelpRequested,
     InsightKind,
     InsightProvenance,
     InsightStatus,
@@ -39,6 +40,7 @@ from xsync_v2.domain import (
     RecoverWork,
     Rejected,
     ReportWorkFailure,
+    RequestHelp,
     RequestTopicClarification,
     ResumeTopic,
     SelectTopic,
@@ -270,6 +272,12 @@ def default_context(state, command):
             TriggerKind.LENS_CHANGED,
             work_id=f"work-lens-{command.lens.value}",
             parent_turn_id=parent,
+        )
+    if isinstance(command, RequestHelp):
+        return context(
+            TriggerKind.HELP,
+            work_id=f"work-help-{command.question_id}",
+            parent_turn_id=command.question_id,
         )
     if isinstance(command, ResumeTopic):
         paused = next(
@@ -521,6 +529,54 @@ class StateMachineTest(unittest.TestCase):
                     state.conversation_version,
                     state.conversation_version + 1,
                     "forged-lens",
+                    forged,
+                ),
+            )
+
+    def test_help_request_preserves_the_visible_question_lineage(self):
+        state = apply(initial_dialogue_state("dlg-help", 1), StartSession("start"))
+        state = apply(state, PresentCandidates("candidates", ("支付一致性",)))
+        state = apply(state, StartTopic("topic", contract()))
+        state = apply(state, CommitAgentTurn("opening", agent_turn()))
+
+        wrong = RequestHelp("wrong-help", "other-question")
+        self.assertEqual(
+            Rejected("TOPIC_STATE_CONFLICT"),
+            decide(state, wrong, default_context(state, wrong)),
+        )
+        requested = RequestHelp("help", "q1")
+        bad_parent = context(
+            TriggerKind.HELP,
+            work_id="work-help-bad",
+            parent_turn_id="other-question",
+        )
+        self.assertEqual(
+            Rejected("VALIDATION_FAILED"),
+            decide(state, requested, bad_parent),
+        )
+
+        state = apply(state, requested)
+        topic = state.active_topic
+        assert topic is not None and topic.work is not None
+        self.assertIs(ConversationPhase.WAITING_HOST, state.phase)
+        self.assertIsNone(topic.current_agent_turn)
+        self.assertIs(TriggerKind.HELP, topic.work.trigger.kind)
+        self.assertEqual("q1", topic.work.trigger.parent_turn_id)
+
+        forged = HelpRequested(
+            topic.topic_run_id,
+            "q1",
+            replace(topic.work.trigger, parent_turn_id="other-question"),
+        )
+        with self.assertRaisesRegex(ValueError, "ILLEGAL_EVENT_TRANSITION"):
+            reduce(
+                state,
+                CommittedDialogueEvent(
+                    "event-forged-help",
+                    state.sequence + 1,
+                    state.conversation_version,
+                    state.conversation_version + 1,
+                    "forged-help",
                     forged,
                 ),
             )

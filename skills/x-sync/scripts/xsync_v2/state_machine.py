@@ -28,6 +28,7 @@ from .domain import (
     GateId,
     GateRequirement,
     GateStatus,
+    HelpRequested,
     InsightKind,
     InsightProvenance,
     InsightStatus,
@@ -44,6 +45,7 @@ from .domain import (
     RecoverWork,
     Rejected,
     ReportWorkFailure,
+    RequestHelp,
     RequestTopicClarification,
     ResumeTopic,
     SelectTopic,
@@ -1092,6 +1094,41 @@ def _set_lens(
     )
 
 
+def _request_help(
+    state: DialogueState, command: DialogueCommand, context: DecisionContext
+) -> Decision:
+    if type(command) is not RequestHelp:
+        return Rejected("TOPIC_STATE_CONFLICT")
+    topic = state.active_topic
+    if (
+        state.phase is not ConversationPhase.AWAITING_USER
+        or topic is None
+        or topic.open_question_id != command.question_id
+    ):
+        return Rejected("TOPIC_STATE_CONFLICT")
+    if not is_protocol_id(command.question_id):
+        return Rejected("VALIDATION_FAILED")
+    if (
+        context.evidence.health is not topic.evidence_health
+        or context.evidence.evidence_digest != topic.evidence_digest
+        or context.evidence.exact_recheck_fingerprint
+        != topic.exact_recheck_fingerprint
+    ):
+        return Rejected("EVIDENCE_STALE")
+    trigger = _matching_trigger(
+        context.trigger,
+        TriggerKind.HELP,
+        topic.contract.contract_digest,
+        topic.evidence_digest,
+    )
+    if trigger is None or trigger.parent_turn_id != command.question_id:
+        return Rejected("VALIDATION_FAILED")
+    return _accept(
+        command.command_id,
+        HelpRequested(topic.topic_run_id, command.question_id, trigger),
+    )
+
+
 def _switch_topic(
     state: DialogueState, command: DialogueCommand, context: DecisionContext
 ) -> Decision:
@@ -1399,6 +1436,7 @@ TRANSITION_TABLE: dict[type, Handler] = {
     CommitAgentTurn: _commit_agent_turn,
     SubmitLearnerTurn: _submit_turn,
     SetLens: _set_lens,
+    RequestHelp: _request_help,
     PauseTopic: _pause_topic,
     SwitchTopic: _switch_topic,
     ResumeTopic: _resume_topic,
@@ -1718,6 +1756,7 @@ EVENT_PAYLOAD_TYPES = frozenset(
         TopicClarificationRequested,
         TopicClarificationAnswered,
         LensChanged,
+        HelpRequested,
         TopicStarted,
         AgentTurnCommitted,
         LearnerTurnSubmitted,
@@ -1760,6 +1799,12 @@ def _valid_event_payload_shape(payload: object) -> bool:
         return (
             _valid_text(payload.topic_run_id)
             and type(payload.lens) is Lens
+            and is_canonical_trigger_binding(payload.next_trigger)
+        )
+    if type(payload) is HelpRequested:
+        return (
+            _valid_text(payload.topic_run_id)
+            and is_protocol_id(payload.question_id)
             and is_canonical_trigger_binding(payload.next_trigger)
         )
     if type(payload) is TopicStarted:
@@ -2191,6 +2236,35 @@ def reduce(
             active_topic=replace(
                 lens_topic,
                 current_lens=payload.lens,
+                current_agent_turn=None,
+                work=_queued_work_from_event(
+                    state.session_id,
+                    event,
+                    payload.next_trigger,
+                ),
+            ),
+            phase=ConversationPhase.WAITING_HOST,
+        )
+    elif type(payload) is HelpRequested:
+        help_topic = state.active_topic
+        _require(
+            help_topic is not None
+            and state.phase is ConversationPhase.AWAITING_USER
+            and help_topic.open_question_id == payload.question_id
+            and payload.topic_run_id == help_topic.topic_run_id
+            and _valid_trigger(
+                payload.next_trigger,
+                TriggerKind.HELP,
+                help_topic.contract.contract_digest,
+                help_topic.evidence_digest,
+            )
+            and payload.next_trigger.parent_turn_id == payload.question_id
+        )
+        help_topic = cast(TopicRunState, help_topic)
+        next_state = replace(
+            next_state,
+            active_topic=replace(
+                help_topic,
                 current_agent_turn=None,
                 work=_queued_work_from_event(
                     state.session_id,
