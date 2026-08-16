@@ -36,7 +36,6 @@ _MANIFEST_KEYS = frozenset(
         "channel",
         "style",
         "focus",
-        "question_count",
         "evidence_sources",
     }
 )
@@ -74,7 +73,6 @@ class DialogueBootstrapManifest:
     channel: str
     style: str
     focus: str
-    question_count: int
     evidence_sources: tuple[EvidenceSource, ...]
 
 
@@ -191,8 +189,6 @@ def decode_bootstrap_manifest(raw: bytes) -> DialogueBootstrapManifest:
         or manifest["style"] not in {"socratic", "regular"}
         or type(manifest["focus"]) is not str
         or manifest["focus"] not in {"business", "technical", "mixed"}
-        or type(manifest["question_count"]) is not int
-        or not 1 <= manifest["question_count"] <= 100
         or type(sources_value) is not list
         or not 1 <= len(sources_value) <= MAX_EVIDENCE_SOURCES
     ):
@@ -209,7 +205,6 @@ def decode_bootstrap_manifest(raw: bytes) -> DialogueBootstrapManifest:
         manifest["channel"],
         manifest["style"],
         manifest["focus"],
-        manifest["question_count"],
         sources,
     )
 
@@ -296,7 +291,6 @@ def bootstrap_config(
         manifest.channel,
         manifest.style,
         manifest.focus,
-        manifest.question_count,
     )
 
 

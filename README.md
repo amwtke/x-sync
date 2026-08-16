@@ -10,8 +10,9 @@ X-Sync 是一个基于仓库证据的自适应问答 Skill，用来持续发现�
 
 ## 能力
 
-- 常规问答与苏格拉底追问；
-- 单选题与自由回答；
+- 默认 Dialogue v2：连续、自适应、一次一问、自然结束，不绑定固定题数；
+- 话题候选、自定义话题、澄清、帮助、视角切换、暂停、切换、恢复与导出；
+- 旧版固定题库问答保留为显式 legacy 模式；
 - 从 Spec、Story、ADR、Commit、Bug Fix、测试和核心代码生成问题；
 - 从项目代码扩展到框架、MySQL、Redis、网络、OS、Docker、性能、事务、一致性、安全与可观测性；
 - 终端答题与本地 HTML 答题；
@@ -62,12 +63,14 @@ $x-sync
 /x-sync
 ```
 
-裸调用会使用当前本地账户作为默认 learner，自动研究仓库、准备题库并打开本地 HTML 页面。新会话默认采用：
+裸调用会使用当前本地账户作为默认 learner，研究仓库并打开 Dialogue v2 本地 HTML 页面。默认行为是：
 
 - 苏格拉底模式；
 - 网页交互；
-- 业务与技术混合，五题中两类都必须出现；
-- 5 道题；
+- 根据任务在业务与技术视角之间自适应；
+- 一次只显示一个问题，下一问依据上一轮回答生成；
+- 没有固定题数，满足话题理解门槛后自然完成；
+- 可随时请求帮助、切换视角、暂停、换话题、恢复或导出；
 - 从仓库证据中选择一个有边界的 onboarding 范围。
 
 要针对当前工作目录之外的项目出题，使用 `-d` 指定目标项目：
@@ -88,9 +91,9 @@ Claude Code 中同样适用：
 /x-sync:x-sync -d ../target-project
 ```
 
-`-d` 会贯穿扫描、证据、题库、会话与报告全流程；问题只针对该目标项目，后续“继续”也沿用它。相对路径从宿主当前工作目录解析，Git 子目录会归一到仓库根目录，因此 `-d` 选择的是包含该目录的整个 Git worktree，并不是 monorepo 子目录过滤器；包含空格的路径需要加引号。底层 runtime 中，`-d TARGET_PROJECT` 是 `--repo TARGET_PROJECT` 的短别名。
+`-d` 会贯穿扫描、证据、对话与导出全流程；问题只针对该目标项目，后续“继续”也沿用它。相对路径从宿主当前工作目录解析，Git 子目录会归一到仓库根目录，因此 `-d` 选择的是包含该目录的整个 Git worktree，并不是 monorepo 子目录过滤器；包含空格的路径需要加引号。
 
-未完成的会话会优先恢复，不会被默认配置覆盖。准备第一个新会话前，X-Sync 必须先扫描整个安全工程目录，然后才会判断能否复用题库或需要生成新题库。扫描范围包含 Git 已跟踪和未忽略的未跟踪普通文件；每个合格文件都会被枚举、分类并计算内容指纹，再由 Agent 从文档、源码、测试、配置、迁移、基础设施与历史中选择有依据的问题。
+未完成的 v2 对话会优先恢复，不会被默认配置覆盖；旧 v1 测验不会劫持裸调用。准备第一个 v2 对话前，X-Sync 会检查整个安全工程目录并选择聚焦证据。扫描范围包含 Git 已跟踪和未忽略的未跟踪普通文件；Agent 从文档、源码、测试、配置、迁移、基础设施与历史中选择有依据的话题和问题。
 
 “整个工程”不等于读取已知的凭据文件或第三方缓存：`.git/`、`.x-sync/`、`.env*`、常见 secret/credential/token 配置和密钥、vendor/依赖与构建产物、Git ignored 文件、二进制、超大文件、符号链接及 submodule 都不会作为扫描内容打开。首次门禁完成后，后续调用不会仅因启动 X-Sync 就重复全量扫描；仓库或任务变化时仍会按状态和证据新鲜度定向刷新。完整扫描要求至少有一个 commit 的普通 Git worktree，非 Git 目录、unborn repository 或 sparse checkout 会明确停止。
 
@@ -100,19 +103,19 @@ Claude Code 中同样适用：
 python3 skills/x-sync/scripts/xsync.py scan --repo /path/to/repository --json
 ```
 
-## 覆盖默认值
+## 显式旧版测验
 
-用自然语言给出的值会逐项覆盖默认值：
+只有明确要求 legacy、固定题库或固定题数时才进入 v1。例如：
 
 ```text
-$x-sync 检查支付退款链路，常规模式，纯技术，终端答题，8 道题，最高深度 4。
+$x-sync legacy：检查支付退款链路，常规模式，纯技术，固定 8 道题。
 ```
 
 ```text
 /x-sync 针对最近 20 个 bug-fix commit 做一次技术复习，终端常规问答。
 ```
 
-每次会话会把任务范围、业务/技术焦点、最大深度、题库版本和 commit 一起写入本地记录；后续会优先抽取到期复习与不稳定知识点。
+legacy 模式继续支持题库、固定 count、终端答题和旧报告；它不是默认入口。
 
 HTML 页面保存答案后，回到 Codex 或 Claude Code 输入：
 
@@ -120,7 +123,7 @@ HTML 页面保存答案后，回到 Codex 或 Claude Code 输入：
 继续
 ```
 
-宿主 Agent 会重新打开题目引用的仓库证据，按逐项 rubric 复核自由回答或苏格拉底回答，然后推进到下一题。
+宿主 Agent 会读取 durable pending work，重新核对引用的仓库证据，并生成与本轮回答相关的下一步；不会按预设题号机械推进。
 
 ## 本地数据
 
@@ -128,6 +131,10 @@ HTML 页面保存答案后，回到 Codex 或 Claude Code 输入：
 
 ```text
 .x-sync/
+  dialogue-v2/
+    registry/
+    sessions/
+    runtime/
   repositories/<repo-id>/
     scan.json
   users/<learner>/
@@ -135,7 +142,7 @@ HTML 页面保存答案后，回到 Codex 或 Claude Code 输入：
     projects/<repo-id>/
       banks/
       mastery.json
-      sessions/<session-id>/
+      sessions/<session-id>/        # legacy v1
         bank.json
         config.json
         state.json

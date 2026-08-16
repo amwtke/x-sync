@@ -189,7 +189,6 @@ class RuntimeCliTest(unittest.TestCase):
                     "channel": "web",
                     "style": "socratic",
                     "focus": "mixed",
-                    "question_count": 5,
                     "evidence_sources": [
                         {
                             "evidence_id": "evidence.runtime",

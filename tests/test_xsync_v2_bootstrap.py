@@ -30,7 +30,6 @@ def manifest_tree() -> dict[str, object]:
         "channel": "web",
         "style": "socratic",
         "focus": "mixed",
-        "question_count": 5,
         "evidence_sources": [
             {
                 "evidence_id": "evidence.runtime",

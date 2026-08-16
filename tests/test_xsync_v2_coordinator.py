@@ -735,7 +735,6 @@ class CoordinatorTest(unittest.TestCase):
             ("created_at", ""),
             ("created_at", "not-a-timestamp"),
             ("evidence_digest", "sha256:not-a-digest"),
-            ("question_count", True),
             ("channel", "remote"),
             ("style", "exam"),
             ("focus", "unknown"),
@@ -779,7 +778,6 @@ class CoordinatorTest(unittest.TestCase):
             replace(valid, runtime_epoch="bad\nvalue"),
             replace(valid, task_scope=""),
             replace(valid, language=""),
-            replace(valid, question_count=101),
         ):
             with self.subTest(config=invalid), self.assertRaisesRegex(
                 CoordinatorError, "INVALID_SESSION_CONFIG"

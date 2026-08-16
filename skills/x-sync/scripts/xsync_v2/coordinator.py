@@ -138,7 +138,6 @@ class DialogueSessionConfig:
     channel: str = "web"
     style: str = "socratic"
     focus: str = "mixed"
-    question_count: int = 5
 
 
 @dataclass(frozen=True, slots=True)
@@ -198,7 +197,6 @@ _CONFIG_KEYS = frozenset(
         "channel",
         "style",
         "focus",
-        "question_count",
     }
 )
 _CONFIG_MAX_BYTES = 64 * 1024
@@ -242,8 +240,6 @@ def _validate_config(config: object) -> DialogueSessionConfig:
         or config.channel not in {"web", "terminal"}
         or config.style not in {"socratic", "regular"}
         or config.focus not in {"business", "technical", "mixed"}
-        or type(config.question_count) is not int
-        or not 1 <= config.question_count <= 100
     ):
         raise CoordinatorError("INVALID_SESSION_CONFIG")
     return config
@@ -265,7 +261,6 @@ def _config_tree(config: DialogueSessionConfig) -> dict[str, object]:
         "channel": config.channel,
         "style": config.style,
         "focus": config.focus,
-        "question_count": config.question_count,
     }
 
 
@@ -323,7 +318,6 @@ def decode_session_config(raw: bytes) -> DialogueSessionConfig:
             channel=value["channel"],
             style=value["style"],
             focus=value["focus"],
-            question_count=value["question_count"],
         )
         _validate_config(config)
         if canonical_json_bytes(value) != raw or encode_session_config(config) != raw:
