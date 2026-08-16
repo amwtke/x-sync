@@ -23,6 +23,8 @@ from .coordinator import (
 )
 from .dispatch import AfterCommitDispatcher, AfterCommitReport
 from .evidence import SessionEvidenceStore
+from .export import ExportMaterializer
+from .export_service import ExportService
 from .host_control import HostContextProvider, HostControl, MonotonicClock
 from .host_api import HostApi
 from .host_ipc import HostIpcServer
@@ -126,6 +128,7 @@ class DialogueRuntime:
             raise DialogueRuntimeError("INVALID_RUNTIME_CONFIGURATION")
         root: SecureDirectory | None = None
         dialogues: SecureDirectory | None = None
+        exports: SecureDirectory | None = None
         locks: DomainLockManager | None = None
         evidence_store: SessionEvidenceStore | None = None
         submission_store: SubmissionHandleStore | None = None
@@ -133,6 +136,7 @@ class DialogueRuntime:
         try:
             root = SecureDirectory.open(path)
             dialogues = root.ensure_directory("dialogues")
+            exports = root.ensure_directory("exports")
             locks = DomainLockManager(path / "locks")
             runtime_owner = locks.acquire_runtime_owner(runtime_epoch)
             if repository_mode:
@@ -166,6 +170,14 @@ class DialogueRuntime:
                 registry_id,
                 evidence_verifier=active_evidence_verifier,
                 after_commit_dispatcher=dispatcher,
+            )
+            export_service = ExportService(
+                coordinator,
+                dialogues,
+                locks,
+                ExportMaterializer(exports),
+                active_evidence_verifier,
+                clock=browser_clock,
             )
             leases = LeaseStore(
                 dialogues,
@@ -209,6 +221,7 @@ class DialogueRuntime:
                 coordinator,
                 active_evidence_verifier,
                 clock=browser_clock,
+                export_service=export_service,
             )
         except BaseException:
             if submission_store is not None:
@@ -219,12 +232,15 @@ class DialogueRuntime:
                 locks.close()
             if dialogues is not None:
                 dialogues.close()
+            if exports is not None:
+                exports.close()
             if root is not None:
                 root.close()
             raise
 
         self._root = root
         self._dialogues = dialogues
+        self._exports = exports
         self._locks = locks
         self._coordinator = coordinator
         self._leases = leases
@@ -234,6 +250,7 @@ class DialogueRuntime:
         self._host_control = host_control
         self._host_api = host_api
         self._browser_commands = browser_commands
+        self._export_service = export_service
         self._public_stream = public_stream
         self._dispatcher = dispatcher
         self._evidence_store = evidence_store
@@ -282,12 +299,18 @@ class DialogueRuntime:
     def resolve(self, config: DialogueSessionConfig) -> DialogueResolution:
         """Resolve or hand off through the canonical Registry coordinator."""
         self._require_open()
-        return self._coordinator.resolve(config)
+        resolution = self._coordinator.resolve(config)
+        self._export_service.recover_current()
+        return self._coordinator.recover() or resolution
 
     def recover(self) -> DialogueResolution | None:
         """Finish durable recovery before opening product command ingress."""
         self._require_open()
-        return self._coordinator.recover()
+        resolution = self._coordinator.recover()
+        if resolution is not None:
+            self._export_service.recover_current()
+            return self._coordinator.recover()
+        return None
 
     def replay_committed(self) -> AfterCommitReport | None:
         """Force durable Observer catch-up for every registered dialogue."""
@@ -401,6 +424,7 @@ class DialogueRuntime:
             if error is None:
                 error = exc
         self._dialogues.close()
+        self._exports.close()
         self._root.close()
         if error is not None:
             raise error

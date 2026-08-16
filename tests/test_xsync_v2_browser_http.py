@@ -4,6 +4,7 @@ import json
 import unittest
 from dataclasses import replace
 from types import SimpleNamespace
+from unittest import mock
 
 import tests.xsync_v2_path  # noqa: F401
 
@@ -31,6 +32,8 @@ from xsync_v2.domain import (
     DialogueState,
     EvidenceCheck,
     EvidenceHealth,
+    ExportRecord,
+    ExportStatus,
     ExploreTopics,
     GateAssessment,
     GateId,
@@ -63,6 +66,7 @@ from xsync_v2.observer import (
     ImmutablePayloadView,
     StreamKind,
 )
+from xsync_v2.export import ExportArtifacts
 from xsync_v2.observers.public_stream import (
     PublicStreamError,
     PublicStreamObserver,
@@ -203,7 +207,7 @@ class BrowserHttpTest(unittest.TestCase):
         self.assertEqual("awaiting_user", payload["phase"])
         self.assertEqual("question-1", payload["topic"]["question"]["id"])
         self.assertEqual(
-            ["help", "pause", "set_lens", "submit_turn", "switch"],
+            ["export", "help", "pause", "set_lens", "submit_turn", "switch"],
             payload["allowed_actions"],
         )
         rendered = response.body.decode()
@@ -222,6 +226,56 @@ class BrowserHttpTest(unittest.TestCase):
         self.assertEqual(401, denied.status)
         self.assertEqual("AUTH_REQUIRED", json.loads(denied.body)["error"]["code"])
         self.assertNotIn("browser-secret", denied.body.decode())
+
+    def test_export_endpoint_returns_only_verified_artifact_metadata(self) -> None:
+        record = ExportRecord(
+            "export-1",
+            1,
+            "intent-export-1",
+            8,
+            "2026-08-16T12:05:00+08:00",
+            digest("request"),
+            ExportStatus.COMPLETED,
+            "2026-08-16T12:05:01+08:00",
+            "insights.export-1.json",
+            digest("json"),
+            "insights.export-1.md",
+            digest("markdown"),
+            digest("overlay"),
+        )
+        artifacts = ExportArtifacts(
+            "export-1",
+            1,
+            "session-1",
+            "insights.export-1.json",
+            digest("json"),
+            "insights.export-1.md",
+            digest("markdown"),
+            digest("overlay"),
+        )
+        outcome = SimpleNamespace(
+            record=record,
+            artifacts=artifacts,
+            replayed=False,
+        )
+        with mock.patch.object(self.service, "export", return_value=outcome):
+            response = self.api.handle(
+                request(
+                    "POST",
+                    "/api/v2/exports",
+                    body={},
+                    headers=(
+                        ("Content-Type", "application/json"),
+                        ("Idempotency-Key", "export-key"),
+                        ("If-Match", '"conversation-v5"'),
+                    ),
+                )
+            )
+        self.assertEqual(200, response.status)
+        payload = json.loads(response.body)
+        self.assertEqual("export-1", payload["export"]["export_id"])
+        self.assertEqual(digest("json"), payload["export"]["json_digest"])
+        self.assertNotIn("freshness_overlay_digest", payload["export"])
 
     def test_completed_topic_projects_only_the_portable_summary(self) -> None:
         base = state()
@@ -248,7 +302,7 @@ class BrowserHttpTest(unittest.TestCase):
         response = self.api.handle(request("GET", "/api/v2/state"))
         payload = json.loads(response.body)
 
-        self.assertEqual(["explore"], payload["allowed_actions"])
+        self.assertEqual(["explore", "export"], payload["allowed_actions"])
         projected = payload["completed_topics"][0]["summary"]
         self.assertEqual(summary.takeaway, projected["takeaway"])
         self.assertNotIn(digest("evidence"), response.body.decode())
@@ -458,7 +512,10 @@ class BrowserHttpTest(unittest.TestCase):
         )
         projected = self.api.handle(request("GET", "/api/v2/state"))
         public = json.loads(projected.body)
-        self.assertEqual(["answer_clarification"], public["allowed_actions"])
+        self.assertEqual(
+            ["answer_clarification", "export"],
+            public["allowed_actions"],
+        )
         self.assertEqual(
             {
                 "question_id": "clarification-1",

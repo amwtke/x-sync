@@ -20,6 +20,7 @@ from .browser_service import (
     BrowserIntent,
     BrowserServiceError,
     CustomTopicIntent,
+    ExportIntent,
     ExploreTopicsIntent,
     PauseTopicIntent,
     RecoverWorkIntent,
@@ -34,6 +35,7 @@ from .domain import (
     ConversationPhase,
     DialogueState,
     Lens,
+    SessionLifecycle,
     WorkRecoveryAction,
 )
 from .observers.public_stream import (
@@ -198,11 +200,11 @@ _ERRORS: dict[str, tuple[int, str, bool, str]] = {
 
 
 def _error(code: str) -> BrowserHttpResponse:
-    public_code = (
-        "VERSION_CONFLICT"
-        if code == "CONVERSATION_VERSION_CONFLICT"
-        else code
-    )
+    aliases = {
+        "CONVERSATION_VERSION_CONFLICT": "VERSION_CONFLICT",
+        "EXPORT_IDEMPOTENCY_CONFLICT": "IDEMPOTENCY_CONFLICT",
+    }
+    public_code = aliases.get(code, code)
     status, message, retryable, recovery = _ERRORS.get(
         public_code,
         _ERRORS["INTERNAL_ERROR"],
@@ -224,6 +226,8 @@ def _error(code: str) -> BrowserHttpResponse:
 
 def _allowed_actions(state: DialogueState) -> tuple[str, ...]:
     actions: set[str] = set()
+    if state.lifecycle in {SessionLifecycle.OPEN, SessionLifecycle.ENDED}:
+        actions.add("export")
     if state.active_topic is not None:
         actions.add("pause")
         actions.add("set_lens")
@@ -427,6 +431,7 @@ class BrowserApi:
             if request.method == "POST" and parsed.path in {
                 "/api/v2/turns",
                 "/api/v2/topic",
+                "/api/v2/exports",
             }:
                 if parsed.query:
                     raise BrowserApiError("VALIDATION_FAILED")
@@ -554,14 +559,29 @@ class BrowserApi:
         if type(body) is not dict or any(type(key) is not str for key in body):
             raise BrowserApiError("VALIDATION_FAILED")
         intent = self._intent(path, body)
-        outcome = self._service.execute(
-            BrowserCommandRequest(
-                self._session_id,
-                key,
-                int(matched.group(1)),
-                intent,
-            )
+        command = BrowserCommandRequest(
+            self._session_id,
+            key,
+            int(matched.group(1)),
+            intent,
         )
+        if type(intent) is ExportIntent:
+            export = self._service.export(command)
+            return _response(
+                200,
+                {
+                    "export": {
+                        "export_id": export.record.export_id,
+                        "export_sequence": export.record.export_sequence,
+                        "json_path": export.artifacts.json_path,
+                        "json_digest": export.artifacts.json_digest,
+                        "markdown_path": export.artifacts.markdown_path,
+                        "markdown_digest": export.artifacts.markdown_digest,
+                    },
+                    "replayed": export.replayed,
+                },
+            )
+        outcome = self._service.execute(command)
         state = outcome.state
         return _response(
             200,
@@ -574,6 +594,10 @@ class BrowserApi:
 
     @staticmethod
     def _intent(path: str, body: dict[str, object]) -> BrowserIntent:
+        if path == "/api/v2/exports":
+            if body:
+                raise BrowserApiError("VALIDATION_FAILED")
+            return ExportIntent()
         if path == "/api/v2/turns":
             if set(body) != {"question_id", "text"}:
                 raise BrowserApiError("VALIDATION_FAILED")

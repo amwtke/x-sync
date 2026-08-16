@@ -90,6 +90,34 @@
     return committed;
   }
 
+  async function exportNow() {
+    if (!snapshot) return;
+    clearError();
+    const status = byId("export-status");
+    document.querySelectorAll("button").forEach((button) => { button.disabled = true; });
+    status.textContent = "正在生成 JSON 与 Markdown…";
+    try {
+      const response = await request("/api/v2/exports", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Idempotency-Key": idempotencyKey("export"),
+          "If-Match": `"conversation-v${snapshot.conversation_version}"`,
+        },
+        body: "{}",
+      });
+      const payload = await response.json();
+      status.textContent = `已生成：${payload.export.json_path} · ${payload.export.markdown_path}`;
+      await refresh();
+    } catch (error) {
+      status.textContent = "";
+      showError(`导出未完成：${error.message}`);
+      await refresh().catch(() => {});
+    } finally {
+      document.querySelectorAll("button").forEach((button) => { button.disabled = false; });
+    }
+  }
+
   function renderCandidates(state) {
     const panel = byId("candidates");
     const list = byId("candidate-list");
@@ -265,6 +293,9 @@
     renderTopic(state);
     renderPaused(state);
     renderCompleted(state);
+    const exportPanel = byId("export-panel");
+    exportPanel.hidden = !state.allowed_actions.includes("export");
+    byId("export").onclick = exportNow;
     const waiting = byId("waiting");
     waiting.hidden = state.phase !== "waiting_host";
     byId("selected-candidate").textContent = state.selected_candidate

@@ -7,6 +7,7 @@ import unittest
 from unittest import mock
 
 import tests.xsync_v2_path  # noqa: F401
+from xsync_v2.browser_service import BrowserCommandRequest, ExportIntent
 from xsync_v2.coordinator import DialogueSessionConfig
 from xsync_v2.domain import EvidenceCheck, EvidenceHealth, Lens
 from xsync_v2.event_codec import sha256_digest
@@ -103,6 +104,27 @@ class DialogueRuntimeTest(unittest.TestCase):
             tuple(item.event_type for item in events),
         )
         self.assertEqual((1,), tuple(item.sequence for item in events))
+
+    def test_browser_export_completes_without_host_and_replays(self) -> None:
+        runtime = self.open_runtime()
+        resolution = runtime.resolve(self.config)
+        request = BrowserCommandRequest(
+            "session-1",
+            "export-key-1",
+            resolution.dialogue_state.conversation_version,
+            ExportIntent(),
+        )
+        first = runtime.browser.export(request)
+        self.assertFalse(first.replayed)
+        self.assertEqual("completed", first.record.status.value)
+        self.assertTrue(first.artifacts.json_path.endswith(".json"))
+        self.assertTrue(first.artifacts.markdown_path.endswith(".md"))
+
+        replay = runtime.browser.export(request)
+        self.assertTrue(replay.replayed)
+        self.assertEqual(first.record, replay.record)
+        state = runtime.recover().dialogue_state
+        self.assertEqual(1, len(state.exports))
 
     def test_reopen_replays_the_same_durable_graph(self) -> None:
         first = self.open_runtime()

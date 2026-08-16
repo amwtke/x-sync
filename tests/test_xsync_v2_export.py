@@ -220,6 +220,23 @@ class ExportTest(unittest.TestCase):
                 snapshot(),
                 request.requested_at,
             )
+        missing = ExportRecord(
+            "export-missing",
+            1,
+            "intent-export-missing",
+            1,
+            request.requested_at,
+            digest("missing-request"),
+            ExportStatus.COMPLETED,
+            "2026-08-16T12:00:01+08:00",
+            "missing.json",
+            digest("missing-json"),
+            "missing.md",
+            digest("missing-markdown"),
+            digest("missing-overlay"),
+        )
+        with self.assertRaisesRegex(ExportError, "EXPORT_ARTIFACT_MISSING"):
+            self.materializer.update_latest("dialogue-1", missing)
 
 
 if __name__ == "__main__":

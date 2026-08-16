@@ -416,7 +416,23 @@ class ExportMaterializer:
             raise ExportError("EXPORT_NOT_COMPLETED")
         session_directory: SecureDirectory | None = None
         try:
-            session_directory = self._exports.ensure_directory(session_id)
+            session_directory = self._exports.open_directory(session_id)
+            try:
+                json_bytes = session_directory.read_bytes(
+                    completed.json_path,
+                    max_bytes=MAX_EXPORT_BYTES,
+                )
+                markdown_bytes = session_directory.read_bytes(
+                    completed.markdown_path,
+                    max_bytes=MAX_EXPORT_BYTES,
+                )
+            except SecureFsError as exc:
+                raise ExportError("EXPORT_ARTIFACT_MISSING") from exc
+            if (
+                sha256_digest(json_bytes) != completed.json_digest
+                or sha256_digest(markdown_bytes) != completed.markdown_digest
+            ):
+                raise ExportError("EXPORT_ARTIFACT_HASH_MISMATCH")
             tree = {
                 "schema_version": SCHEMA_VERSION,
                 "record_type": "x_sync_latest_export",
@@ -469,7 +485,12 @@ class ExportMaterializer:
                     return
             session_directory.replace_derived("latest.json", pointer)
         except SecureFsError as exc:
-            raise ExportError(exc.code) from exc
+            code = (
+                "EXPORT_ARTIFACT_MISSING"
+                if exc.code in {"DIRECTORY_NOT_FOUND", "FILE_NOT_FOUND"}
+                else exc.code
+            )
+            raise ExportError(code) from exc
         finally:
             if session_directory is not None:
                 session_directory.close()

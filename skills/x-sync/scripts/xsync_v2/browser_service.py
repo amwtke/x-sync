@@ -46,6 +46,12 @@ from .domain import (
 )
 from .event_codec import ActorKind, DialogueActor
 from .event_store import DialogueCommitOutcome
+from .export_service import (
+    ExportService,
+    ExportServiceError,
+    ExportServiceOutcome,
+    ExportServiceRequest,
+)
 from .work_identity import is_protocol_id, is_sha256_digest
 
 _MAX_TEXT_BYTES = 32 * 1024
@@ -148,6 +154,11 @@ class RecoverWorkIntent:
     action: WorkRecoveryAction
 
 
+@dataclass(frozen=True, slots=True)
+class ExportIntent:
+    """Learner request for an immediate model-free portable export."""
+
+
 BrowserIntent: TypeAlias = (
     SubmitTurnIntent
     | SelectTopicIntent
@@ -160,6 +171,7 @@ BrowserIntent: TypeAlias = (
     | ExploreTopicsIntent
     | ResumeTopicIntent
     | RecoverWorkIntent
+    | ExportIntent
 )
 
 
@@ -247,17 +259,23 @@ class BrowserCommandService:
         evidence_verifier: EvidenceVerifier,
         *,
         clock: Clock,
+        export_service: ExportService | None = None,
     ) -> None:
         if (
             not callable(getattr(coordinator, "recover", None))
             or not callable(getattr(coordinator, "execute", None))
             or not callable(evidence_verifier)
             or not callable(clock)
+            or (
+                export_service is not None
+                and type(export_service) is not ExportService
+            )
         ):
             raise BrowserServiceError("INVALID_BROWSER_SERVICE_CONFIGURATION")
         self._coordinator = coordinator
         self._evidence_verifier = evidence_verifier
         self._clock = clock
+        self._export_service = export_service
 
     def current(self, session_id: str) -> DialogueResolution:
         """Read the durable current Session without accepting a session path."""
@@ -315,6 +333,26 @@ class BrowserCommandService:
         except CoordinatorError as exc:
             raise BrowserServiceError(exc.code) from exc
 
+    def export(self, request: BrowserCommandRequest) -> ExportServiceOutcome:
+        """Delegate one validated export to the durable model-free executor."""
+        request = self._validate_request(request)
+        if type(request.intent) is not ExportIntent:
+            raise BrowserServiceError("VALIDATION_FAILED")
+        service = self._export_service
+        if service is None:
+            raise BrowserServiceError("EXPORT_NOT_CONFIGURED")
+        try:
+            return service.request(
+                ExportServiceRequest(
+                    request.session_id,
+                    request.idempotency_key,
+                    request.expected_conversation_version,
+                    request.actor_id,
+                )
+            )
+        except ExportServiceError as exc:
+            raise BrowserServiceError(exc.code) from exc
+
     @staticmethod
     def _validate_request(request: object) -> BrowserCommandRequest:
         if (
@@ -337,6 +375,7 @@ class BrowserCommandService:
                 ExploreTopicsIntent,
                 ResumeTopicIntent,
                 RecoverWorkIntent,
+                ExportIntent,
             }
         ):
             raise BrowserServiceError("VALIDATION_FAILED")
@@ -668,6 +707,7 @@ __all__ = [
     "BrowserServiceError",
     "CustomTopicIntent",
     "ExploreTopicsIntent",
+    "ExportIntent",
     "PauseTopicIntent",
     "RecoverWorkIntent",
     "RequestHelpIntent",
