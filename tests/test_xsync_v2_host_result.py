@@ -17,6 +17,7 @@ from xsync_v2.domain import (
     SelectTopic,
     SessionStarted,
     StartSession,
+    TopicSummary,
     TriggerBinding,
     TriggerKind,
     WorkFailureCategory,
@@ -30,6 +31,7 @@ from xsync_v2.host_result import (
     TopicCandidatesResult,
     TopicClarificationResult,
     TopicStartedResult,
+    TopicSummaryResult,
     WorkFailureResult,
     decode_host_result,
     encode_host_result,
@@ -172,6 +174,14 @@ class HostResultCodecTest(unittest.TestCase):
             ),
             TopicStartedResult(contract()),
             DialogueTurnResult(agent_turn()),
+            TopicSummaryResult(
+                TopicSummary(
+                    "Browser events and Host work form one recoverable protocol.",
+                    ("model-1",),
+                    ("How should remote Hosts reconnect?",),
+                    "Export and revisit the result.",
+                )
+            ),
             WorkFailureResult(
                 WorkFailureCategory.HOST_TRANSIENT,
                 "HOST_TIMEOUT",

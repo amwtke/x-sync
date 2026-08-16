@@ -253,6 +253,35 @@ class PublicStreamObserverTest(unittest.TestCase):
         )
         self.assertNotIn("secret", repr(projected))
 
+    def test_topic_completion_exposes_summary_but_not_completion_proof(self) -> None:
+        observer = PublicStreamObserver(
+            retention_limit=8,
+            subscriber_queue_limit=8,
+        )
+        subscription = observer.subscribe("session-1", after_sequence=0)
+        observer.on_batch(
+            batch(
+                event(
+                    "event-completed",
+                    1,
+                    tag="topic_completed",
+                    fields=(
+                        ("topic_run_id", "topic-1"),
+                        ("takeaway", "Browser and Host use a durable protocol."),
+                        ("confirmed_entry_ids", '["bridge-1"]'),
+                        ("open_questions", "[]"),
+                        ("next_suggestion", "Export it."),
+                        ("evidence_fingerprint", "sha256:secret"),
+                    ),
+                )
+            )
+        )
+
+        (projected,) = subscription.read_available()
+        self.assertEqual("topic_completed", projected.event_type)
+        self.assertEqual(5, len(projected.fields))
+        self.assertNotIn("sha256:secret", repr(projected))
+
     def test_failure_lifecycle_is_contiguous_and_fail_closed(self) -> None:
         observer = PublicStreamObserver(
             retention_limit=8,

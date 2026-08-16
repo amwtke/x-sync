@@ -13,6 +13,7 @@ from xsync_v2.browser_service import (
     RequestHelpIntent,
     SelectTopicIntent,
     SetLensIntent,
+    SubmitTurnIntent,
 )
 from xsync_v2.coordinator import (
     CoordinatorError,
@@ -27,11 +28,19 @@ from xsync_v2.domain import (
     DecisionContext,
     EvidenceCheck,
     EvidenceHealth,
+    GateAssessment,
+    GateId,
+    GateStatus,
+    InsightKind,
+    InsightProvenance,
+    InsightStatus,
+    LearnerModelEntry,
     Lens,
     PresentCandidates,
     ReportWorkFailure,
     SelectTopic,
     StartTopic,
+    TopicSummary,
     TopicSelectionSubmitted,
     TopicStarted,
     TriggerBinding,
@@ -50,6 +59,7 @@ from xsync_v2.host_result import (
     TopicCandidatesResult,
     TopicClarificationResult,
     TopicStartedResult,
+    TopicSummaryResult,
 )
 from xsync_v2.host_work import (
     HostResultPublishRequest,
@@ -340,6 +350,105 @@ class HostWorkServiceTest(unittest.TestCase):
             "q-after-help",
             continued.state.active_topic.open_question_id,
         )
+
+    def test_supported_topic_can_complete_with_one_atomic_summary(self) -> None:
+        opening_work, opening_fence = self.start_topic()
+        opening = self.service.publish_result(
+            HostResultPublishRequest(
+                "opening-before-completion",
+                opening_work,
+                DialogueTurnResult(agent_turn()),
+                self.config.created_at,
+                HOST,
+                opening_fence,
+            )
+        )
+        browser = BrowserCommandService(
+            self.coordinator,
+            lambda item: EvidenceCheck(
+                EvidenceHealth.CURRENT,
+                item.evidence_digest,
+            ),
+            clock=lambda: self.config.created_at,
+        )
+        browser.execute(
+            BrowserCommandRequest(
+                "dlg-a",
+                "answer-for-supported-gates",
+                opening.state.conversation_version,
+                SubmitTurnIntent("q1", "由 durable marker 恢复。"),
+            )
+        )
+        reply_work = self.current_work()
+        reply_fence = self.claim(reply_work, "supported-reply")
+        learner_turn_id = reply_work.parent_turn_id
+        assert learner_turn_id is not None
+        bridge = LearnerModelEntry(
+            "bridge-1",
+            InsightKind.BUSINESS_TECHNICAL_MAPPING,
+            InsightStatus.CONFIRMED,
+            InsightProvenance.JOINTLY_CONFIRMED,
+            "业务责任映射到 marker 与幂等发布。",
+            (learner_turn_id,),
+            ("ev.spec",),
+        )
+        supported = tuple(
+            GateAssessment(
+                gate_id,
+                GateStatus.SUPPORTED,
+                (learner_turn_id,),
+                ("ev.spec",),
+            )
+            for gate_id in (
+                GateId.MECHANISM,
+                GateId.BOUNDARY,
+                GateId.REPOSITORY_APPLICATION,
+            )
+        )
+        final_turn = replace(
+            agent_turn("q-final"),
+            learner_model_delta=(bridge,),
+            gate_assessments=supported,
+        )
+        final_question = self.service.publish_result(
+            HostResultPublishRequest(
+                "supported-final-question",
+                reply_work,
+                DialogueTurnResult(final_turn),
+                self.config.created_at,
+                HOST,
+                reply_fence,
+            )
+        )
+        browser.execute(
+            BrowserCommandRequest(
+                "dlg-a",
+                "answer-final-question",
+                final_question.state.conversation_version,
+                SubmitTurnIntent("q-final", "work、lease 与 receipt 各自负责边界。"),
+            )
+        )
+        summary_work = self.current_work()
+        summary_fence = self.claim(summary_work, "summary")
+        summary = TopicSummary(
+            "Browser 写 durable event, Host 以 fenced work 接续。",
+            ("bridge-1",),
+            ("远程 Host 如何重连?",),
+            "导出结论并在下一任务复核。",
+        )
+        completed = self.service.publish_result(
+            HostResultPublishRequest(
+                "complete-supported-topic",
+                summary_work,
+                TopicSummaryResult(summary),
+                self.config.created_at,
+                HOST,
+                summary_fence,
+            )
+        )
+        self.assertIs(ConversationPhase.NONE, completed.state.phase)
+        self.assertIsNone(completed.state.active_topic)
+        self.assertEqual(summary, completed.state.completed_topics[0].summary)
 
     def setUp(self) -> None:
         self.temporary = TemporaryDirectory()

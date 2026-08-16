@@ -16,12 +16,14 @@ from typing import TypeAlias, cast
 
 from .domain import (
     AgentTurnResult,
+    CompleteTopic,
     CommitAgentTurn,
     PresentCandidates,
     ReportWorkFailure,
     RequestTopicClarification,
     StartTopic,
     TopicContract,
+    TopicSummary,
     TriggerKind,
     WorkFailure,
     WorkFailureCategory,
@@ -64,6 +66,7 @@ class HostResultKind(StrEnum):
     TOPIC_STARTED = "topic_started"
     TOPIC_CLARIFICATION = "topic_clarification"
     DIALOGUE_TURN = "dialogue_turn"
+    TOPIC_SUMMARY = "topic_summary"
     WORK_FAILURE = "work_failure"
 
 
@@ -90,6 +93,13 @@ class TopicClarificationResult:
 
 
 @dataclass(frozen=True, slots=True)
+class TopicSummaryResult:
+    """One guarded compact summary which completes the current Topic."""
+
+    summary: TopicSummary
+
+
+@dataclass(frozen=True, slots=True)
 class DialogueTurnResult:
     """One adaptive visible Agent turn and structured model/gate updates."""
 
@@ -109,6 +119,7 @@ HostResult: TypeAlias = (
     TopicCandidatesResult
     | TopicStartedResult
     | TopicClarificationResult
+    | TopicSummaryResult
     | DialogueTurnResult
     | WorkFailureResult
 )
@@ -117,6 +128,7 @@ HostResultCommand: TypeAlias = (
     | StartTopic
     | RequestTopicClarification
     | CommitAgentTurn
+    | CompleteTopic
     | ReportWorkFailure
 )
 
@@ -218,6 +230,10 @@ def decode_host_result(raw: bytes) -> HostResult:
             _keys(value, frozenset({"type", "turn"}))
             turn = decode_host_domain_value(value["turn"], AgentTurnResult)
             return DialogueTurnResult(cast(AgentTurnResult, turn))
+        if kind is HostResultKind.TOPIC_SUMMARY:
+            _keys(value, frozenset({"type", "summary"}))
+            summary = decode_host_domain_value(value["summary"], TopicSummary)
+            return TopicSummaryResult(cast(TopicSummary, summary))
         _keys(
             value,
             frozenset(
@@ -260,6 +276,11 @@ def _tree(result: HostResult) -> dict[str, object]:
             "type": HostResultKind.TOPIC_CLARIFICATION.value,
             "question_id": result.question_id,
             "question": result.question,
+        }
+    if type(result) is TopicSummaryResult:
+        return {
+            "type": HostResultKind.TOPIC_SUMMARY.value,
+            "summary": encode_host_domain_value(result.summary),
         }
     if type(result) is DialogueTurnResult:
         return {
@@ -345,6 +366,10 @@ def host_result_command(
         if work.kind not in _DIALOGUE_WORK_KINDS:
             raise HostResultError("HOST_RESULT_WORK_MISMATCH")
         return CommitAgentTurn(command_id, result.turn)
+    if type(result) is TopicSummaryResult:
+        if work.kind not in _DIALOGUE_WORK_KINDS:
+            raise HostResultError("HOST_RESULT_WORK_MISMATCH")
+        return CompleteTopic(command_id, result.summary)
     if type(result) is WorkFailureResult:
         return ReportWorkFailure(
             command_id,
@@ -368,6 +393,7 @@ __all__ = [
     "TopicCandidatesResult",
     "TopicClarificationResult",
     "TopicStartedResult",
+    "TopicSummaryResult",
     "WorkFailureResult",
     "decode_host_result",
     "encode_host_result",

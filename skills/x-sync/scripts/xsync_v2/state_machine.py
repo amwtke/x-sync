@@ -12,6 +12,7 @@ from .domain import (
     AgentTurnResult,
     AnswerTopicClarification,
     CandidatesPresented,
+    CompleteTopic,
     CommitAgentTurn,
     CommittedDialogueEvent,
     ConversationPhase,
@@ -62,11 +63,13 @@ from .domain import (
     TopicClarification,
     TopicClarificationAnswered,
     TopicClarificationRequested,
+    TopicCompleted,
     TopicContract,
     TopicLifecycle,
     TopicPaused,
     TopicResumed,
     TopicRunState,
+    TopicSummary,
     TopicSelectionSubmitted,
     TopicStarted,
     TopicSwitchRequested,
@@ -489,6 +492,22 @@ def _valid_agent_turn_shape(result: object) -> bool:
     )
 
 
+def _valid_topic_summary(summary: object) -> bool:
+    return (
+        type(summary) is TopicSummary
+        and _valid_text(summary.takeaway)
+        and type(summary.confirmed_entry_ids) is tuple
+        and bool(summary.confirmed_entry_ids)
+        and all(is_protocol_id(item) for item in summary.confirmed_entry_ids)
+        and len(summary.confirmed_entry_ids)
+        == len(set(summary.confirmed_entry_ids))
+        and type(summary.open_questions) is tuple
+        and all(_valid_text(item) for item in summary.open_questions)
+        and len(summary.open_questions) == len(set(summary.open_questions))
+        and _valid_text(summary.next_suggestion)
+    )
+
+
 def _valid_agent_turn(
     contract: TopicContract,
     result: object,
@@ -669,11 +688,25 @@ def _valid_topic_state(
                 or not _valid_text(topic.last_learner_text)
             )
         )
-        or sum(
-            item is not None
-            for item in (topic.current_agent_turn, topic.work)
+        or (
+            expected_lifecycle is TopicLifecycle.COMPLETED
+            and (
+                topic.current_agent_turn is not None
+                or topic.work is not None
+                or not _valid_topic_summary(topic.summary)
+            )
         )
-        != 1
+        or (
+            expected_lifecycle is not TopicLifecycle.COMPLETED
+            and (
+                topic.summary is not None
+                or sum(
+                    item is not None
+                    for item in (topic.current_agent_turn, topic.work)
+                )
+                != 1
+            )
+        )
     ):
         return False
     if topic.current_agent_turn is not None:
@@ -1129,6 +1162,63 @@ def _request_help(
     )
 
 
+def _complete_topic(
+    state: DialogueState, command: DialogueCommand, context: DecisionContext
+) -> Decision:
+    if type(command) is not CompleteTopic:
+        return Rejected("TOPIC_STATE_CONFLICT")
+    topic = state.active_topic
+    if (
+        state.phase is not ConversationPhase.WAITING_HOST
+        or topic is None
+        or topic.work is None
+        or topic.work.status is not WorkStatus.QUEUED
+    ):
+        return Rejected("TOPIC_STATE_CONFLICT")
+    if not _valid_topic_summary(command.summary):
+        return Rejected("VALIDATION_FAILED")
+    if (
+        context.trigger != topic.work.trigger
+        or context.evidence.health is not topic.evidence_health
+        or context.evidence.evidence_digest != topic.evidence_digest
+        or context.evidence.exact_recheck_fingerprint
+        != topic.exact_recheck_fingerprint
+    ):
+        return Rejected("EVIDENCE_STALE")
+    if context.evidence.health not in PUBLISHABLE_EVIDENCE:
+        return Rejected("EVIDENCE_STALE")
+    confirmed = frozenset(
+        item.entry_id
+        for item in topic.learner_model
+        if item.status is InsightStatus.CONFIRMED
+    )
+    has_bridge = any(
+        item.kind is InsightKind.BUSINESS_TECHNICAL_MAPPING
+        and item.status is InsightStatus.CONFIRMED
+        for item in topic.learner_model
+    )
+    if (
+        any(item.status is not GateStatus.SUPPORTED for item in topic.gates)
+        or not has_bridge
+        or not set(command.summary.confirmed_entry_ids).issubset(confirmed)
+    ):
+        return Rejected("TOPIC_COMPLETION_GUARD_FAILED")
+    fingerprint = (
+        context.evidence.exact_recheck_fingerprint
+        if context.evidence.exact_recheck_fingerprint is not None
+        else context.evidence.evidence_digest
+    )
+    return _accept(
+        command.command_id,
+        TopicCompleted(
+            topic.topic_run_id,
+            command.summary,
+            topic.work.trigger,
+            context.evidence,
+            state.sequence,
+            fingerprint,
+        ),
+    )
 def _switch_topic(
     state: DialogueState, command: DialogueCommand, context: DecisionContext
 ) -> Decision:
@@ -1437,6 +1527,7 @@ TRANSITION_TABLE: dict[type, Handler] = {
     SubmitLearnerTurn: _submit_turn,
     SetLens: _set_lens,
     RequestHelp: _request_help,
+    CompleteTopic: _complete_topic,
     PauseTopic: _pause_topic,
     SwitchTopic: _switch_topic,
     ResumeTopic: _resume_topic,
@@ -1569,6 +1660,7 @@ def validate_state(state: DialogueState) -> None:
         or type(state.phase) is not ConversationPhase
         or type(state.candidates) is not tuple
         or type(state.paused_topics) is not tuple
+        or type(state.completed_topics) is not tuple
         or (
             state.selected_candidate is not None
             and not _valid_text(state.selected_candidate)
@@ -1598,6 +1690,10 @@ def validate_state(state: DialogueState) -> None:
             type(item) is not TopicRunState
             for item in state.paused_topics
         )
+        or any(
+            type(item) is not TopicRunState
+            for item in state.completed_topics
+        )
     ):
         raise ValueError("STATE_INVARIANT_VIOLATION")
     if state.lifecycle is SessionLifecycle.NEW and (
@@ -1605,6 +1701,7 @@ def validate_state(state: DialogueState) -> None:
         or topic is not None
         or state.session_work is not None
         or state.paused_topics
+        or state.completed_topics
     ):
         raise ValueError("STATE_INVARIANT_VIOLATION")
     if state.lifecycle is SessionLifecycle.ENDED and (
@@ -1738,6 +1835,16 @@ def validate_state(state: DialogueState) -> None:
         for item in state.paused_topics
     ):
         raise ValueError("STATE_INVARIANT_VIOLATION")
+    if not all(
+        _valid_topic_state(
+            item,
+            TopicLifecycle.COMPLETED,
+            state.session_id,
+            state.sequence,
+        )
+        for item in state.completed_topics
+    ):
+        raise ValueError("STATE_INVARIANT_VIOLATION")
     if topic and any(
         item.topic_run_id == topic.topic_run_id
         for item in state.paused_topics
@@ -1745,6 +1852,15 @@ def validate_state(state: DialogueState) -> None:
         raise ValueError("STATE_INVARIANT_VIOLATION")
     paused_ids = tuple(item.topic_run_id for item in state.paused_topics)
     if len(paused_ids) != len(set(paused_ids)):
+        raise ValueError("STATE_INVARIANT_VIOLATION")
+    completed_ids = tuple(item.topic_run_id for item in state.completed_topics)
+    all_topic_ids = paused_ids + completed_ids + (
+        () if topic is None else (topic.topic_run_id,)
+    )
+    if (
+        len(completed_ids) != len(set(completed_ids))
+        or len(all_topic_ids) != len(set(all_topic_ids))
+    ):
         raise ValueError("STATE_INVARIANT_VIOLATION")
 
 
@@ -1757,6 +1873,7 @@ EVENT_PAYLOAD_TYPES = frozenset(
         TopicClarificationAnswered,
         LensChanged,
         HelpRequested,
+        TopicCompleted,
         TopicStarted,
         AgentTurnCommitted,
         LearnerTurnSubmitted,
@@ -1806,6 +1923,15 @@ def _valid_event_payload_shape(payload: object) -> bool:
             _valid_text(payload.topic_run_id)
             and is_protocol_id(payload.question_id)
             and is_canonical_trigger_binding(payload.next_trigger)
+        )
+    if type(payload) is TopicCompleted:
+        return (
+            _valid_text(payload.topic_run_id)
+            and _valid_topic_summary(payload.summary)
+            and is_canonical_trigger_binding(payload.trigger)
+            and _valid_evidence_shape(payload.evidence)
+            and _valid_nonnegative_int(payload.as_of_sequence)
+            and is_sha256_digest(payload.evidence_fingerprint)
         )
     if type(payload) is TopicStarted:
         return (
@@ -2273,6 +2399,57 @@ def reduce(
                 ),
             ),
             phase=ConversationPhase.WAITING_HOST,
+        )
+    elif type(payload) is TopicCompleted:
+        completed_topic = state.active_topic
+        _require(
+            completed_topic is not None
+            and state.phase is ConversationPhase.WAITING_HOST
+            and completed_topic.work is not None
+            and completed_topic.work.status is WorkStatus.QUEUED
+            and payload.topic_run_id == completed_topic.topic_run_id
+            and payload.trigger == completed_topic.work.trigger
+            and payload.evidence.health is completed_topic.evidence_health
+            and payload.evidence.evidence_digest
+            == completed_topic.evidence_digest
+            and payload.evidence.exact_recheck_fingerprint
+            == completed_topic.exact_recheck_fingerprint
+            and payload.evidence.health in PUBLISHABLE_EVIDENCE
+            and payload.as_of_sequence == state.sequence
+            and payload.evidence_fingerprint
+            == (
+                payload.evidence.exact_recheck_fingerprint
+                if payload.evidence.exact_recheck_fingerprint is not None
+                else payload.evidence.evidence_digest
+            )
+            and all(
+                item.status is GateStatus.SUPPORTED
+                for item in completed_topic.gates
+            )
+            and any(
+                item.kind is InsightKind.BUSINESS_TECHNICAL_MAPPING
+                and item.status is InsightStatus.CONFIRMED
+                for item in completed_topic.learner_model
+            )
+            and set(payload.summary.confirmed_entry_ids).issubset(
+                item.entry_id
+                for item in completed_topic.learner_model
+                if item.status is InsightStatus.CONFIRMED
+            )
+        )
+        completed_topic = cast(TopicRunState, completed_topic)
+        completed = replace(
+            completed_topic,
+            lifecycle=TopicLifecycle.COMPLETED,
+            current_agent_turn=None,
+            work=None,
+            summary=payload.summary,
+        )
+        next_state = replace(
+            next_state,
+            active_topic=None,
+            completed_topics=(*state.completed_topics, completed),
+            phase=ConversationPhase.NONE,
         )
     elif type(payload) is TopicPaused:
         _require(

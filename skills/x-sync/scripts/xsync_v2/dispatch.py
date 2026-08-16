@@ -18,6 +18,7 @@ from .domain import (
     SessionStarted,
     TopicClarificationAnswered,
     TopicClarificationRequested,
+    TopicCompleted,
     TopicPaused,
     TopicResumed,
     TopicSelectionSubmitted,
@@ -275,6 +276,21 @@ def _dialogue_payload_view(event: CommittedDialogueEvent) -> ImmutablePayloadVie
             _fields(
                 ("topic_run_id", payload.topic_run_id),
                 ("requires_reground", _json_bool(payload.requires_reground)),
+            ),
+        )
+    if type(payload) is TopicCompleted:
+        summary = payload.summary
+        return ImmutablePayloadView(
+            "topic_completed",
+            _fields(
+                ("topic_run_id", payload.topic_run_id),
+                ("takeaway", summary.takeaway),
+                (
+                    "confirmed_entry_ids",
+                    json.dumps(summary.confirmed_entry_ids),
+                ),
+                ("open_questions", json.dumps(summary.open_questions)),
+                ("next_suggestion", summary.next_suggestion),
             ),
         )
     if type(payload) in {WorkFailed, WorkDeadLettered}:

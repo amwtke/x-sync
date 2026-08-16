@@ -50,6 +50,7 @@ from xsync_v2.domain import (
     TopicContract,
     TopicLifecycle,
     TopicRunState,
+    TopicSummary,
     TriggerBinding,
     TriggerKind,
     WorkRecoveryAction,
@@ -220,6 +221,36 @@ class BrowserHttpTest(unittest.TestCase):
         self.assertEqual(401, denied.status)
         self.assertEqual("AUTH_REQUIRED", json.loads(denied.body)["error"]["code"])
         self.assertNotIn("browser-secret", denied.body.decode())
+
+    def test_completed_topic_projects_only_the_portable_summary(self) -> None:
+        base = state()
+        assert base.active_topic is not None
+        summary = TopicSummary(
+            "Browser events and Host work form one recoverable protocol.",
+            ("bridge-1",),
+            (),
+            "Export and revisit the result.",
+        )
+        completed = replace(
+            base.active_topic,
+            lifecycle=TopicLifecycle.COMPLETED,
+            current_agent_turn=None,
+            summary=summary,
+        )
+        self.coordinator.state = replace(
+            base,
+            phase=ConversationPhase.NONE,
+            active_topic=None,
+            completed_topics=(completed,),
+        )
+
+        response = self.api.handle(request("GET", "/api/v2/state"))
+        payload = json.loads(response.body)
+
+        self.assertEqual([], payload["allowed_actions"])
+        projected = payload["completed_topics"][0]["summary"]
+        self.assertEqual(summary.takeaway, projected["takeaway"])
+        self.assertNotIn(digest("evidence"), response.body.decode())
 
     def test_turn_headers_and_body_become_one_typed_command(self) -> None:
         headers = (

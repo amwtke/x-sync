@@ -233,12 +233,30 @@
     });
   }
 
+  function renderCompleted(state) {
+    const panel = byId("completed");
+    const list = byId("completed-list");
+    const topics = state.completed_topics || [];
+    panel.hidden = topics.length === 0;
+    list.replaceChildren();
+    topics.forEach((topic) => {
+      const article = document.createElement("article");
+      const title = document.createElement("h3");
+      const takeaway = document.createElement("p");
+      title.textContent = topic.title;
+      takeaway.textContent = topic.summary.takeaway;
+      article.append(title, takeaway);
+      list.append(article);
+    });
+  }
+
   function render(state) {
     connection.textContent = `已连接 · ${state.phase}`;
     renderCandidates(state);
     renderClarification(state);
     renderTopic(state);
     renderPaused(state);
+    renderCompleted(state);
     const waiting = byId("waiting");
     waiting.hidden = state.phase !== "waiting_host";
     byId("selected-candidate").textContent = state.selected_candidate

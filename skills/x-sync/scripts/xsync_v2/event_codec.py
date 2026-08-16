@@ -22,6 +22,7 @@ from .domain import (
     AgentTurnResult,
     AnswerTopicClarification,
     CandidatesPresented,
+    CompleteTopic,
     CommitAgentTurn,
     CommittedDialogueEvent,
     CurrentWorkState,
@@ -55,10 +56,12 @@ from .domain import (
     TopicClarification,
     TopicClarificationAnswered,
     TopicClarificationRequested,
+    TopicCompleted,
     TopicContract,
     TopicPaused,
     TopicResumed,
     TopicRunState,
+    TopicSummary,
     TopicSelectionSubmitted,
     TopicStarted,
     TopicSwitchRequested,
@@ -198,6 +201,7 @@ DOMAIN_TYPES = frozenset(
         AgentTurnResult,
         AnswerTopicClarification,
         CandidatesPresented,
+        CompleteTopic,
         CommittedDialogueEvent,
         CommitAgentTurn,
         CurrentWorkState,
@@ -230,10 +234,12 @@ DOMAIN_TYPES = frozenset(
         TopicClarification,
         TopicClarificationAnswered,
         TopicClarificationRequested,
+        TopicCompleted,
         TopicContract,
         TopicPaused,
         TopicResumed,
         TopicRunState,
+        TopicSummary,
         TopicSelectionSubmitted,
         TopicSwitchRequested,
         TopicStarted,
@@ -267,6 +273,7 @@ EVENT_TYPE_BY_PAYLOAD = {
     TopicClarificationAnswered: "topic_clarification_answered",
     LensChanged: "lens_changed",
     HelpRequested: "help_requested",
+    TopicCompleted: "topic_completed",
     TopicStarted: "topic_started",
     AgentTurnCommitted: "agent_turn_committed",
     LearnerTurnSubmitted: "learner_turn_submitted",
@@ -364,11 +371,11 @@ def sha256_digest(payload: bytes) -> str:
 def decode_host_domain_value(value: object, expected: type[object]) -> object:
     """Decode one allowlisted Host result value into an exact domain record.
 
-    This deliberately exposes only the two semantic result records accepted
+    This deliberately exposes only the semantic result records accepted
     from a Host adapter.  Persisted event/state decoding continues to use the
     closed record codecs below.
     """
-    if expected not in {TopicContract, AgentTurnResult}:
+    if expected not in {TopicContract, AgentTurnResult, TopicSummary}:
         raise ValueError("HOST_DOMAIN_TYPE_NOT_ALLOWED")
     decoded = _from_tree(value, expected)
     _validate_domain_identifiers(decoded)
@@ -378,7 +385,7 @@ def decode_host_domain_value(value: object, expected: type[object]) -> object:
 def encode_host_domain_value(value: object) -> object:
     """Encode one allowlisted exact Host result domain record as a JSON tree."""
     value_type = type(value)
-    if value_type not in {TopicContract, AgentTurnResult}:
+    if value_type not in {TopicContract, AgentTurnResult, TopicSummary}:
         raise ValueError("HOST_DOMAIN_TYPE_NOT_ALLOWED")
     _validate_domain_identifiers(value)
     return _to_tree(value, value_type)
@@ -666,6 +673,7 @@ def dialogue_request_digest(record: DialogueWriteRequestRecord) -> str:
             AnswerTopicClarification,
             SetLens,
             RequestHelp,
+            CompleteTopic,
             StartTopic,
             CommitAgentTurn,
             SubmitLearnerTurn,

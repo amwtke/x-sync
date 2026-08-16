@@ -24,6 +24,7 @@ from .dispatch import CommittedFactCollector
 from .domain import (
     Accepted,
     CommitAgentTurn,
+    CompleteTopic,
     CommittedDialogueEvent,
     CurrentWorkState,
     DecisionContext,
@@ -74,6 +75,7 @@ from .host_result import (
     TopicCandidatesResult,
     TopicClarificationResult,
     TopicStartedResult,
+    TopicSummaryResult,
     WorkFailureResult,
     encode_host_result,
     host_command_id,
@@ -120,6 +122,7 @@ HostWorkCommand: TypeAlias = (
     | StartTopic
     | RequestTopicClarification
     | CommitAgentTurn
+    | CompleteTopic
     | ReportWorkFailure
 )
 _HOST_RESULT_TYPES = frozenset(
@@ -127,6 +130,7 @@ _HOST_RESULT_TYPES = frozenset(
         TopicCandidatesResult,
         TopicClarificationResult,
         TopicStartedResult,
+        TopicSummaryResult,
         DialogueTurnResult,
         WorkFailureResult,
     }
@@ -579,6 +583,7 @@ class HostWorkService:
                 StartTopic,
                 RequestTopicClarification,
                 CommitAgentTurn,
+                CompleteTopic,
                 ReportWorkFailure,
             }
             or type(request.work) is not RunnableWork

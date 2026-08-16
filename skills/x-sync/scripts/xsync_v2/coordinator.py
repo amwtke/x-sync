@@ -25,6 +25,7 @@ from .dispatch import (
 from .domain import (
     Accepted,
     CommitAgentTurn,
+    CompleteTopic,
     CommittedDialogueEvent,
     ConversationPhase,
     DecisionContext,
@@ -949,6 +950,7 @@ class DialogueCoordinator:
             StartTopic,
             RequestTopicClarification,
             CommitAgentTurn,
+            CompleteTopic,
             ReportWorkFailure,
         }:
             raise CoordinatorError("HOST_WORK_SERVICE_REQUIRED")

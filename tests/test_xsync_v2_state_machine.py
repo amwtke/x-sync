@@ -16,6 +16,7 @@ from xsync_v2.domain import (
     AnswerTopicClarification,
     CandidatesPresented,
     CommitAgentTurn,
+    CompleteTopic,
     CommittedDialogueEvent,
     ConversationPhase,
     CurrentWorkState,
@@ -54,11 +55,13 @@ from xsync_v2.domain import (
     SwitchTopic,
     TaskScope,
     TopicContract,
+    TopicCompleted,
     TopicLifecycle,
     TopicPaused,
     TopicResumed,
     TopicSelectionSubmitted,
     TopicStarted,
+    TopicSummary,
     TopicSwitchRequested,
     TriggerBinding,
     TriggerKind,
@@ -278,6 +281,18 @@ def default_context(state, command):
             TriggerKind.HELP,
             work_id=f"work-help-{command.question_id}",
             parent_turn_id=command.question_id,
+        )
+    if isinstance(command, CompleteTopic):
+        topic = state.active_topic
+        assert topic is not None and topic.work is not None
+        return DecisionContext(
+            state.registry_generation,
+            topic.work.trigger,
+            EvidenceCheck(
+                topic.evidence_health,
+                topic.evidence_digest,
+                topic.exact_recheck_fingerprint,
+            ),
         )
     if isinstance(command, ResumeTopic):
         paused = next(
@@ -578,6 +593,106 @@ class StateMachineTest(unittest.TestCase):
                     state.conversation_version + 1,
                     "forged-help",
                     forged,
+                ),
+            )
+
+    def test_topic_completion_requires_supported_gates_bridge_and_evidence(self):
+        state = apply(initial_dialogue_state("dlg-complete", 1), StartSession("start"))
+        state = apply(state, PresentCandidates("candidates", ("支付一致性",)))
+        state = apply(state, StartTopic("topic", contract()))
+        state = apply(state, CommitAgentTurn("opening", agent_turn()))
+        state = apply(
+            state,
+            SubmitLearnerTurn("answer", "q1", "turn-1", "由 durable marker 恢复。"),
+        )
+        premature = CompleteTopic(
+            "premature",
+            TopicSummary(
+                "还没有足够证据完成话题。",
+                ("missing-confirmed-entry",),
+                (),
+                "继续核对仓库边界。",
+            ),
+        )
+        self.assertEqual(
+            Rejected("TOPIC_COMPLETION_GUARD_FAILED"),
+            decide(state, premature, default_context(state, premature)),
+        )
+        bridge = LearnerModelEntry(
+            "bridge-1",
+            InsightKind.BUSINESS_TECHNICAL_MAPPING,
+            InsightStatus.CONFIRMED,
+            InsightProvenance.JOINTLY_CONFIRMED,
+            "业务恢复责任映射到 marker 与幂等发布。",
+            ("turn-1",),
+            ("ev.spec",),
+        )
+        supported = tuple(
+            GateAssessment(
+                gate_id,
+                GateStatus.SUPPORTED,
+                ("turn-1",),
+                ("ev.spec",),
+            )
+            for gate_id in (
+                GateId.MECHANISM,
+                GateId.BOUNDARY,
+                GateId.REPOSITORY_APPLICATION,
+            )
+        )
+        final_turn = replace(
+            agent_turn("q-final"),
+            learner_model_delta=(bridge,),
+            gate_assessments=supported,
+        )
+        state = apply(state, CommitAgentTurn("supported", final_turn))
+        state = apply(
+            state,
+            SubmitLearnerTurn(
+                "final-answer",
+                "q-final",
+                "turn-final",
+                "用 work id、lease 与幂等 receipt 保证不丢不重。",
+            ),
+        )
+        summary = TopicSummary(
+            "浏览器写事件，Host 以可恢复协议继续处理。",
+            ("bridge-1",),
+            ("如何把相同协议扩展到远程 Host？",),
+            "导出当前结论并在下次任务中复核。",
+        )
+        completed = CompleteTopic("complete", summary)
+
+        stale = replace(
+            default_context(state, completed),
+            evidence=EvidenceCheck(EvidenceHealth.STALE, digest("evidence")),
+        )
+        self.assertEqual(Rejected("EVIDENCE_STALE"), decide(state, completed, stale))
+        state = apply(state, completed)
+        self.assertIs(ConversationPhase.NONE, state.phase)
+        self.assertIsNone(state.active_topic)
+        self.assertEqual(1, len(state.completed_topics))
+        self.assertIs(TopicLifecycle.COMPLETED, state.completed_topics[0].lifecycle)
+        self.assertEqual(summary, state.completed_topics[0].summary)
+
+        payload = TopicCompleted(
+            "topic-1",
+            summary,
+            context(TriggerKind.LEARNER_REPLY).trigger,
+            EvidenceCheck(EvidenceHealth.CURRENT, digest("evidence")),
+            0,
+            digest("evidence"),
+        )
+        with self.assertRaisesRegex(ValueError, "ILLEGAL_EVENT_TRANSITION"):
+            reduce(
+                state,
+                CommittedDialogueEvent(
+                    "event-duplicate-completion",
+                    state.sequence + 1,
+                    state.conversation_version,
+                    state.conversation_version + 1,
+                    "duplicate-completion",
+                    payload,
                 ),
             )
 

@@ -31,10 +31,12 @@ from xsync_v2.domain import (
     SessionDeactivationPrepared,
     SessionStarted,
     TopicPaused,
+    TopicCompleted,
     TopicResumed,
     TopicSelectionSubmitted,
     TopicSwitchRequested,
     TopicStarted,
+    TopicSummary,
     TriggerBinding,
     TriggerKind,
     WorkDeadLettered,
@@ -385,6 +387,34 @@ class DispatchTest(unittest.TestCase):
             "question-1",
             dict(mapped.events[-1].payload.fields)["question_id"],
         )
+
+    def test_topic_completion_maps_summary_without_internal_proof(self):
+        summary = TopicSummary(
+            "Browser events and Host work form one recoverable protocol.",
+            ("bridge-1",),
+            ("How should remote Hosts reconnect?",),
+            "Export and revisit the result.",
+        )
+        event = dialogue_event(
+            "event-completed",
+            1,
+            TopicCompleted(
+                "topic-1",
+                summary,
+                trigger(TriggerKind.LEARNER_REPLY),
+                EvidenceCheck(EvidenceHealth.CURRENT, "sha256:" + "2" * 64),
+                7,
+                "sha256:" + "2" * 64,
+            ),
+        )
+
+        mapped = dialogue_batch("session-1", (event,)).events[0]
+
+        self.assertEqual("topic_completed", mapped.payload.tag)
+        fields = dict(mapped.payload.fields)
+        self.assertEqual(summary.takeaway, fields["takeaway"])
+        self.assertNotIn("evidence", repr(mapped.payload))
+        self.assertNotIn("work-1", repr(mapped.payload))
 
     def test_failure_batch_maps_contiguously_without_internal_data(self):
         failed_trigger = trigger()

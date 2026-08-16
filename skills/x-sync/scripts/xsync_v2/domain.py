@@ -243,6 +243,16 @@ class AgentTurnResult:
 
 
 @dataclass(frozen=True, slots=True)
+class TopicSummary:
+    """Compact, portable completion result for one Topic Run."""
+
+    takeaway: str
+    confirmed_entry_ids: tuple[str, ...]
+    open_questions: tuple[str, ...]
+    next_suggestion: str
+
+
+@dataclass(frozen=True, slots=True)
 class TopicClarification:
     """One visible Host clarification and its optional learner answer."""
 
@@ -267,6 +277,7 @@ class TopicRunState:
     last_learner_turn_id: str | None = None
     last_learner_text: str | None = None
     current_lens: Lens | None = None
+    summary: TopicSummary | None = None
 
     @property
     def lens(self) -> Lens:
@@ -303,6 +314,7 @@ class DialogueState:
     paused_topics: tuple[TopicRunState, ...]
     selected_candidate: str | None = None
     topic_clarification: TopicClarification | None = None
+    completed_topics: tuple[TopicRunState, ...] = ()
 
     @property
     def session_unresolved_trigger(self) -> TriggerBinding | None:
@@ -371,6 +383,14 @@ class RequestHelp:
 
     command_id: str
     question_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class CompleteTopic:
+    """Commit the final summary once every completion guard is satisfied."""
+
+    command_id: str
+    summary: TopicSummary
 
 
 @dataclass(frozen=True, slots=True)
@@ -452,6 +472,7 @@ DialogueCommand: TypeAlias = (
     | AnswerTopicClarification
     | SetLens
     | RequestHelp
+    | CompleteTopic
     | StartTopic
     | CommitAgentTurn
     | SubmitLearnerTurn
@@ -516,6 +537,18 @@ class HelpRequested:
     topic_run_id: str
     question_id: str
     next_trigger: TriggerBinding
+
+
+@dataclass(frozen=True, slots=True)
+class TopicCompleted:
+    """Atomic completion proof and compact Topic summary."""
+
+    topic_run_id: str
+    summary: TopicSummary
+    trigger: TriggerBinding
+    evidence: EvidenceCheck
+    as_of_sequence: int
+    evidence_fingerprint: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -624,6 +657,7 @@ DialogueEventPayload: TypeAlias = (
     | TopicClarificationAnswered
     | LensChanged
     | HelpRequested
+    | TopicCompleted
     | TopicStarted
     | AgentTurnCommitted
     | LearnerTurnSubmitted

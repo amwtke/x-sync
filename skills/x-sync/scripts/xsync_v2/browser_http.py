@@ -293,6 +293,23 @@ def _public_state(state: DialogueState) -> dict[str, object]:
             }
             for topic in state.paused_topics
         ],
+        "completed_topics": [
+            {
+                "id": topic.topic_run_id,
+                "title": topic.contract.title,
+                "lifecycle": topic.lifecycle.value,
+                "summary": {
+                    "takeaway": topic.summary.takeaway,
+                    "confirmed_entry_ids": list(
+                        topic.summary.confirmed_entry_ids
+                    ),
+                    "open_questions": list(topic.summary.open_questions),
+                    "next_suggestion": topic.summary.next_suggestion,
+                },
+            }
+            for topic in state.completed_topics
+            if topic.summary is not None
+        ],
         "allowed_actions": list(_allowed_actions(state)),
     }
 

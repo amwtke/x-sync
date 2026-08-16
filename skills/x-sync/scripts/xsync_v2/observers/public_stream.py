@@ -50,6 +50,13 @@ _PUBLIC_FIELD_ORDER: dict[str, tuple[str, ...]] = {
     "topic_paused": ("topic_run_id", "cause"),
     "topic_switch_requested": ("topic_run_id",),
     "topic_resumed": ("topic_run_id", "requires_reground"),
+    "topic_completed": (
+        "topic_run_id",
+        "takeaway",
+        "confirmed_entry_ids",
+        "open_questions",
+        "next_suggestion",
+    ),
 }
 
 
