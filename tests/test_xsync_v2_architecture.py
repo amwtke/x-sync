@@ -32,6 +32,7 @@ from xsync_v2.browser_service import (
     RecoverWorkIntent,
     ResumeTopicIntent,
     SelectTopicIntent,
+    SetLensIntent,
     SubmitTurnIntent,
     SwitchTopicIntent,
 )
@@ -349,6 +350,7 @@ class ArchitectureTest(unittest.TestCase):
             BrowserCommandRequest,
             SubmitTurnIntent,
             SelectTopicIntent,
+            SetLensIntent,
             CustomTopicIntent,
             AnswerTopicClarificationIntent,
             PauseTopicIntent,

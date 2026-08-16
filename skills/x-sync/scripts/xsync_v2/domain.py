@@ -95,6 +95,7 @@ class TriggerKind(StrEnum):
     TOPIC_SELECTION = "topic_selection"
     INITIAL_TURN = "initial_turn"
     LEARNER_REPLY = "learner_reply"
+    LENS_CHANGED = "lens_changed"
     REGROUND = "reground"
 
 
@@ -264,6 +265,14 @@ class TopicRunState:
     learner_turn_ids: tuple[str, ...] = ()
     last_learner_turn_id: str | None = None
     last_learner_text: str | None = None
+    current_lens: Lens | None = None
+
+    @property
+    def lens(self) -> Lens:
+        """Return the current lens, falling back to the contract start."""
+        if self.current_lens is None:
+            return self.contract.starting_lens
+        return self.current_lens
 
     @property
     def open_question_id(self) -> str | None:
@@ -348,6 +357,14 @@ class AnswerTopicClarification:
 
 
 @dataclass(frozen=True, slots=True)
+class SetLens:
+    """Change the active Topic lens and request a lens-grounded turn."""
+
+    command_id: str
+    lens: Lens
+
+
+@dataclass(frozen=True, slots=True)
 class StartTopic:
     command_id: str
     contract: TopicContract
@@ -424,6 +441,7 @@ DialogueCommand: TypeAlias = (
     | SubmitCustomTopic
     | RequestTopicClarification
     | AnswerTopicClarification
+    | SetLens
     | StartTopic
     | CommitAgentTurn
     | SubmitLearnerTurn
@@ -469,6 +487,15 @@ class TopicClarificationAnswered:
 
     question_id: str
     answer: str
+    next_trigger: TriggerBinding
+
+
+@dataclass(frozen=True, slots=True)
+class LensChanged:
+    """Atomic lens change which replaces the prior visible or queued turn."""
+
+    topic_run_id: str
+    lens: Lens
     next_trigger: TriggerBinding
 
 
@@ -576,6 +603,7 @@ DialogueEventPayload: TypeAlias = (
     | TopicSelectionSubmitted
     | TopicClarificationRequested
     | TopicClarificationAnswered
+    | LensChanged
     | TopicStarted
     | AgentTurnCommitted
     | LearnerTurnSubmitted

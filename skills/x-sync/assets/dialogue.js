@@ -130,6 +130,17 @@
     panel.hidden = !topic;
     if (!topic) return;
     byId("topic-lens").textContent = topic.lens;
+    const lens = byId("lens");
+    lens.value = topic.lens;
+    lens.disabled = !state.allowed_actions.includes("set_lens");
+    lens.onchange = () => {
+      if (lens.value === topic.lens) return;
+      mutate(
+        "/api/v2/topic",
+        { action: "set_lens", lens: lens.value },
+        "set-lens",
+      );
+    };
     byId("topic-title").textContent = topic.title;
     byId("topic-objective").textContent = topic.objective;
     byId("guiding-question").textContent = topic.guiding_question;

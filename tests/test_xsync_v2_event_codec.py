@@ -5,6 +5,8 @@ import unittest
 from dataclasses import replace
 from enum import StrEnum
 
+import tests.xsync_v2_path  # noqa: F401
+
 from xsync_v2.domain import (
     Accepted,
     AgentTurnResult,
@@ -73,8 +75,6 @@ from xsync_v2.state_machine import (
     decide_fenced_quiesce,
     reduce,
 )
-
-import tests.xsync_v2_path  # noqa: F401
 
 REAL_DIGEST = "sha256:" + "1" * 64
 ACTOR = DialogueActor(ActorKind.RUNTIME, "runtime.local")

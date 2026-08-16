@@ -28,10 +28,12 @@ from .domain import (
     DialogueState,
     EvidenceCheck,
     EvidenceHealth,
+    Lens,
     PauseTopic,
     RecoverWork,
     ResumeTopic,
     SelectTopic,
+    SetLens,
     SubmitCustomTopic,
     SubmitLearnerTurn,
     SwitchTopic,
@@ -101,6 +103,13 @@ class AnswerTopicClarificationIntent:
 
 
 @dataclass(frozen=True, slots=True)
+class SetLensIntent:
+    """Learner request to continue the active Topic through another lens."""
+
+    lens: Lens
+
+
+@dataclass(frozen=True, slots=True)
 class PauseTopicIntent:
     """Learner request to pause the current Topic Run."""
 
@@ -130,6 +139,7 @@ BrowserIntent: TypeAlias = (
     | SelectTopicIntent
     | CustomTopicIntent
     | AnswerTopicClarificationIntent
+    | SetLensIntent
     | PauseTopicIntent
     | SwitchTopicIntent
     | ResumeTopicIntent
@@ -304,6 +314,7 @@ class BrowserCommandService:
                 SelectTopicIntent,
                 CustomTopicIntent,
                 AnswerTopicClarificationIntent,
+                SetLensIntent,
                 PauseTopicIntent,
                 SwitchTopicIntent,
                 ResumeTopicIntent,
@@ -321,6 +332,8 @@ class BrowserCommandService:
             valid = _valid_text(intent.topic)
         elif type(intent) is AnswerTopicClarificationIntent:
             valid = is_protocol_id(intent.question_id) and _valid_text(intent.answer)
+        elif type(intent) is SetLensIntent:
+            valid = type(intent.lens) is Lens
         elif type(intent) is ResumeTopicIntent:
             valid = is_protocol_id(intent.topic_run_id)
         elif type(intent) is RecoverWorkIntent:
@@ -381,6 +394,8 @@ class BrowserCommandService:
                 intent.question_id,
                 intent.answer,
             )
+        if type(intent) is SetLensIntent:
+            return SetLens(command_id, intent.lens)
         if type(intent) is PauseTopicIntent:
             return PauseTopic(command_id)
         if type(intent) is SwitchTopicIntent:
@@ -422,6 +437,11 @@ class BrowserCommandService:
                 "question_id": intent.question_id,
                 "answer": intent.answer,
             }
+        elif type(intent) is SetLensIntent:
+            intent_tree = {
+                "type": "set_lens",
+                "lens": intent.lens.value,
+            }
         elif type(intent) is PauseTopicIntent:
             intent_tree = {"type": "pause_topic"}
         elif type(intent) is SwitchTopicIntent:
@@ -443,6 +463,11 @@ class BrowserCommandService:
             "session_id": request.session_id,
             "idempotency_key": request.idempotency_key,
             "expected_conversation_version": request.expected_conversation_version,
+            "current_lens": (
+                None
+                if state.active_topic is None
+                else state.active_topic.lens.value
+            ),
             "intent": intent_tree,
         }
         input_digest = _sha256_tree(seed)
@@ -460,6 +485,28 @@ class BrowserCommandService:
                 work_id,
                 config.runtime_epoch,
                 learner_turn_id,
+                topic.contract.contract_digest,
+                input_digest,
+                evidence.evidence_digest,
+            )
+        elif type(intent) is SetLensIntent:
+            topic = state.active_topic
+            if topic is None:
+                raise BrowserServiceError("TOPIC_STATE_CONFLICT")
+            parent_turn_id = (
+                topic.current_agent_turn.question_id
+                if topic.current_agent_turn is not None
+                else (
+                    None
+                    if topic.work is None
+                    else topic.work.trigger.parent_turn_id
+                )
+            )
+            trigger = TriggerBinding(
+                TriggerKind.LENS_CHANGED,
+                work_id,
+                config.runtime_epoch,
+                parent_turn_id,
                 topic.contract.contract_digest,
                 input_digest,
                 evidence.evidence_digest,
@@ -570,6 +617,7 @@ __all__ = [
     "RecoverWorkIntent",
     "ResumeTopicIntent",
     "SelectTopicIntent",
+    "SetLensIntent",
     "SubmitTurnIntent",
     "SwitchTopicIntent",
 ]

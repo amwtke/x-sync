@@ -24,6 +24,8 @@ from xsync_v2.domain import (
     EvidenceCheck,
     EvidenceHealth,
     LearnerTurnSubmitted,
+    Lens,
+    LensChanged,
     PauseCause,
     SessionDeactivationPrepared,
     SessionStarted,
@@ -336,6 +338,15 @@ class DispatchTest(unittest.TestCase):
                     evidence,
                 ),
             ),
+            dialogue_event(
+                "event-6",
+                6,
+                LensChanged(
+                    "topic-1",
+                    Lens.TECHNICAL,
+                    trigger(TriggerKind.LENS_CHANGED),
+                ),
+            ),
         )
 
         mapped = dialogue_batch("session-1", events)
@@ -347,12 +358,17 @@ class DispatchTest(unittest.TestCase):
                 "topic_switch_requested",
                 "session_deactivation_prepared",
                 "topic_resumed",
+                "lens_changed",
             ),
             tuple(item.payload.tag for item in mapped.events),
         )
         self.assertEqual(
             "true",
-            dict(mapped.events[-1].payload.fields)["requires_reground"],
+            dict(mapped.events[-2].payload.fields)["requires_reground"],
+        )
+        self.assertEqual(
+            "technical",
+            dict(mapped.events[-1].payload.fields)["lens"],
         )
 
     def test_failure_batch_maps_contiguously_without_internal_data(self):

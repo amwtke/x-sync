@@ -42,6 +42,7 @@ _DIALOGUE_WORK_KINDS = frozenset(
     {
         TriggerKind.INITIAL_TURN,
         TriggerKind.LEARNER_REPLY,
+        TriggerKind.LENS_CHANGED,
         TriggerKind.REGROUND,
     }
 )

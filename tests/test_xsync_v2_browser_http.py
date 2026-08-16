@@ -5,6 +5,8 @@ import unittest
 from dataclasses import replace
 from types import SimpleNamespace
 
+import tests.xsync_v2_path  # noqa: F401
+
 from xsync_v2.browser_http import (
     BrowserApi,
     BrowserApiError,
@@ -37,6 +39,7 @@ from xsync_v2.domain import (
     RecoverWork,
     ResumeTopic,
     SelectTopic,
+    SetLens,
     SessionLifecycle,
     SubmitCustomTopic,
     SubmitLearnerTurn,
@@ -61,8 +64,6 @@ from xsync_v2.observers.public_stream import (
     PublicStreamError,
     PublicStreamObserver,
 )
-
-import tests.xsync_v2_path  # noqa: F401
 
 
 def digest(label: str) -> str:
@@ -199,7 +200,8 @@ class BrowserHttpTest(unittest.TestCase):
         self.assertEqual("awaiting_user", payload["phase"])
         self.assertEqual("question-1", payload["topic"]["question"]["id"])
         self.assertEqual(
-            ["pause", "submit_turn", "switch"], payload["allowed_actions"]
+            ["pause", "set_lens", "submit_turn", "switch"],
+            payload["allowed_actions"],
         )
         rendered = response.body.decode()
         self.assertNotIn("secret-evidence-ref", rendered)
@@ -263,6 +265,11 @@ class BrowserHttpTest(unittest.TestCase):
                 {"action": "switch"},
                 "switch-key",
                 SwitchTopic,
+            ),
+            (
+                {"action": "set_lens", "lens": "technical"},
+                "lens-key",
+                SetLens,
             ),
             (
                 {"action": "resume", "topic_run_id": "topic-1"},

@@ -71,6 +71,24 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
 
 .candidate-list, .paused-list { display: grid; gap: 12px; margin-top: 24px; }
 .topic-actions { display: flex; gap: 10px; }
+.topic-actions select {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--ink);
+  padding: 8px 12px;
+}
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
 .candidate, .paused-item {
   width: 100%;
   padding: 18px 20px;

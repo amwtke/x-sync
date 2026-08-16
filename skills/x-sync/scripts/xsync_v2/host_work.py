@@ -29,6 +29,7 @@ from .domain import (
     DecisionContext,
     DialogueState,
     LearnerTurnSubmitted,
+    LensChanged,
     PresentCandidates,
     Rejected,
     ReportWorkFailure,
@@ -220,6 +221,8 @@ def _created_trigger(event: CommittedDialogueEvent) -> TriggerBinding | None:
     if type(payload) is TopicStarted:
         return payload.initial_trigger
     if type(payload) is LearnerTurnSubmitted:
+        return payload.next_trigger
+    if type(payload) is LensChanged:
         return payload.next_trigger
     if type(payload) is TopicResumed:
         return payload.resumed_trigger

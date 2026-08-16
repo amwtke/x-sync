@@ -12,6 +12,7 @@ from .domain import (
     CandidatesPresented,
     CommittedDialogueEvent,
     LearnerTurnSubmitted,
+    LensChanged,
     SessionDeactivationPrepared,
     SessionStarted,
     TopicClarificationAnswered,
@@ -228,6 +229,14 @@ def _dialogue_payload_view(event: CommittedDialogueEvent) -> ImmutablePayloadVie
                 ("question_id", payload.question_id),
                 ("learner_turn_id", payload.learner_turn_id),
                 ("text", payload.text),
+            ),
+        )
+    if type(payload) is LensChanged:
+        return ImmutablePayloadView(
+            "lens_changed",
+            (
+                ("topic_run_id", payload.topic_run_id),
+                ("lens", payload.lens.value),
             ),
         )
     if type(payload) is TopicPaused:

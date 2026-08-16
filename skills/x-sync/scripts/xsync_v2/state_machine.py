@@ -34,6 +34,7 @@ from .domain import (
     LearnerModelEntry,
     LearnerTurnSubmitted,
     Lens,
+    LensChanged,
     PauseCause,
     PauseTopic,
     PendingDialogueEvent,
@@ -46,6 +47,7 @@ from .domain import (
     RequestTopicClarification,
     ResumeTopic,
     SelectTopic,
+    SetLens,
     SessionDeactivationPrepared,
     SessionLifecycle,
     SessionStarted,
@@ -620,6 +622,10 @@ def _valid_topic_state(
             for item in topic.learner_model
         )
         or type(topic.learner_turn_ids) is not tuple
+        or (
+            topic.current_lens is not None
+            and type(topic.current_lens) is not Lens
+        )
         or any(not _valid_text(item) for item in topic.learner_turn_ids)
         or (
             topic.work is not None
@@ -1037,6 +1043,55 @@ def _pause_topic(
     return _accept(command.command_id, TopicPaused(state.active_topic.topic_run_id))
 
 
+def _set_lens(
+    state: DialogueState, command: DialogueCommand, context: DecisionContext
+) -> Decision:
+    if type(command) is not SetLens:
+        return Rejected("TOPIC_STATE_CONFLICT")
+    topic = state.active_topic
+    if (
+        topic is None
+        or state.phase
+        not in {ConversationPhase.AWAITING_USER, ConversationPhase.WAITING_HOST}
+    ):
+        return Rejected("TOPIC_STATE_CONFLICT")
+    if type(command.lens) is not Lens:
+        return Rejected("VALIDATION_FAILED")
+    if command.lens is topic.lens:
+        return Rejected("LENS_UNCHANGED")
+    if (
+        context.evidence.health is not topic.evidence_health
+        or context.evidence.evidence_digest != topic.evidence_digest
+        or context.evidence.exact_recheck_fingerprint
+        != topic.exact_recheck_fingerprint
+    ):
+        return Rejected("EVIDENCE_STALE")
+    trigger = _matching_trigger(
+        context.trigger,
+        TriggerKind.LENS_CHANGED,
+        topic.contract.contract_digest,
+        topic.evidence_digest,
+    )
+    if trigger is None:
+        return Rejected("VALIDATION_FAILED")
+    expected_parent = (
+        topic.current_agent_turn.question_id
+        if state.phase is ConversationPhase.AWAITING_USER
+        and topic.current_agent_turn is not None
+        else (
+            None
+            if topic.work is None
+            else topic.work.trigger.parent_turn_id
+        )
+    )
+    if trigger.parent_turn_id != expected_parent:
+        return Rejected("VALIDATION_FAILED")
+    return _accept(
+        command.command_id,
+        LensChanged(topic.topic_run_id, command.lens, trigger),
+    )
+
+
 def _switch_topic(
     state: DialogueState, command: DialogueCommand, context: DecisionContext
 ) -> Decision:
@@ -1343,6 +1398,7 @@ TRANSITION_TABLE: dict[type, Handler] = {
     StartTopic: _start_topic,
     CommitAgentTurn: _commit_agent_turn,
     SubmitLearnerTurn: _submit_turn,
+    SetLens: _set_lens,
     PauseTopic: _pause_topic,
     SwitchTopic: _switch_topic,
     ResumeTopic: _resume_topic,
@@ -1661,6 +1717,7 @@ EVENT_PAYLOAD_TYPES = frozenset(
         TopicSelectionSubmitted,
         TopicClarificationRequested,
         TopicClarificationAnswered,
+        LensChanged,
         TopicStarted,
         AgentTurnCommitted,
         LearnerTurnSubmitted,
@@ -1697,6 +1754,12 @@ def _valid_event_payload_shape(payload: object) -> bool:
         return (
             _valid_text(payload.question_id)
             and _valid_text(payload.answer)
+            and is_canonical_trigger_binding(payload.next_trigger)
+        )
+    if type(payload) is LensChanged:
+        return (
+            _valid_text(payload.topic_run_id)
+            and type(payload.lens) is Lens
             and is_canonical_trigger_binding(payload.next_trigger)
         )
     if type(payload) is TopicStarted:
@@ -2093,6 +2156,47 @@ def reduce(
                 ),
                 last_learner_turn_id=payload.learner_turn_id,
                 last_learner_text=payload.text,
+            ),
+            phase=ConversationPhase.WAITING_HOST,
+        )
+    elif type(payload) is LensChanged:
+        lens_topic = state.active_topic
+        _require(
+            lens_topic is not None
+            and state.phase
+            in {ConversationPhase.AWAITING_USER, ConversationPhase.WAITING_HOST}
+            and payload.topic_run_id == lens_topic.topic_run_id
+            and payload.lens is not lens_topic.lens
+            and _valid_trigger(
+                payload.next_trigger,
+                TriggerKind.LENS_CHANGED,
+                lens_topic.contract.contract_digest,
+                lens_topic.evidence_digest,
+            )
+        )
+        lens_topic = cast(TopicRunState, lens_topic)
+        expected_parent = (
+            lens_topic.current_agent_turn.question_id
+            if state.phase is ConversationPhase.AWAITING_USER
+            and lens_topic.current_agent_turn is not None
+            else (
+                None
+                if lens_topic.work is None
+                else lens_topic.work.trigger.parent_turn_id
+            )
+        )
+        _require(payload.next_trigger.parent_turn_id == expected_parent)
+        next_state = replace(
+            next_state,
+            active_topic=replace(
+                lens_topic,
+                current_lens=payload.lens,
+                current_agent_turn=None,
+                work=_queued_work_from_event(
+                    state.session_id,
+                    event,
+                    payload.next_trigger,
+                ),
             ),
             phase=ConversationPhase.WAITING_HOST,
         )

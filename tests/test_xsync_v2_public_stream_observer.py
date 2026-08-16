@@ -4,6 +4,8 @@ import threading
 import unittest
 from dataclasses import FrozenInstanceError
 
+import tests.xsync_v2_path  # noqa: F401
+
 from xsync_v2.observer import (
     CommittedBatch,
     CommittedEventView,
@@ -15,8 +17,6 @@ from xsync_v2.observers.public_stream import (
     PublicStreamEvent,
     PublicStreamObserver,
 )
-
-import tests.xsync_v2_path  # noqa: F401
 
 
 def event(

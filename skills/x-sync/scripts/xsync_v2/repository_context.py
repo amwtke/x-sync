@@ -208,7 +208,7 @@ class RepositoryHostContextProvider:
         else:
             active_contract = topic.contract
             task_scope = active_contract.task_scope.summary
-            lens = active_contract.starting_lens
+            lens = topic.lens
             gates = topic.gates
             previous_question = (
                 topic.current_agent_turn.question

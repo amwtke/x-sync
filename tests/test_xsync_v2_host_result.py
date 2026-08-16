@@ -4,6 +4,8 @@ import json
 import unittest
 from dataclasses import replace
 
+import tests.xsync_v2_path  # noqa: F401
+
 from xsync_v2.domain import (
     CommittedDialogueEvent,
     DecisionContext,
@@ -35,8 +37,6 @@ from xsync_v2.host_result import (
 )
 from xsync_v2.state_machine import Accepted, decide, reduce
 from xsync_v2.work import WorkOrigin, derive_runnable_work
-
-import tests.xsync_v2_path  # noqa: F401
 from tests.test_xsync_v2_state_machine import agent_turn, contract
 
 

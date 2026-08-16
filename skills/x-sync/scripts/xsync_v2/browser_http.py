@@ -24,12 +24,14 @@ from .browser_service import (
     RecoverWorkIntent,
     ResumeTopicIntent,
     SelectTopicIntent,
+    SetLensIntent,
     SubmitTurnIntent,
     SwitchTopicIntent,
 )
 from .domain import (
     ConversationPhase,
     DialogueState,
+    Lens,
     WorkRecoveryAction,
 )
 from .observers.public_stream import (
@@ -176,6 +178,7 @@ _ERRORS: dict[str, tuple[int, str, bool, str]] = {
     "IDEMPOTENCY_CONFLICT": (409, "幂等键已用于其他请求", False, "new_key"),
     "TURN_PENDING": (409, "已有回答正在处理", True, "reload_state"),
     "WORK_SUPERSEDED": (409, "工作已经失效", False, "reload_state"),
+    "LENS_UNCHANGED": (409, "对话已经使用该视角", False, "reload_state"),
     "VALIDATION_FAILED": (400, "请求格式无效", False, "fix_request"),
     "PAYLOAD_TOO_LARGE": (413, "请求内容过大", False, "reduce_payload"),
     "EVIDENCE_VERIFICATION_FAILED": (
@@ -186,6 +189,7 @@ _ERRORS: dict[str, tuple[int, str, bool, str]] = {
     ),
     "EVIDENCE_CHECK_CONFLICT": (409, "证据已经更新", True, "reload_state"),
     "EVIDENCE_CHANGED": (409, "证据已经更新", True, "reload_state"),
+    "EVIDENCE_STALE": (409, "证据已经更新", True, "reload_state"),
     "NOT_FOUND": (404, "接口不存在", False, "check_path"),
     "INTERNAL_ERROR": (500, "运行时发生内部错误", True, "retry"),
 }
@@ -220,6 +224,7 @@ def _allowed_actions(state: DialogueState) -> tuple[str, ...]:
     actions: set[str] = set()
     if state.active_topic is not None:
         actions.add("pause")
+        actions.add("set_lens")
         actions.add("switch")
     if state.phase is ConversationPhase.AWAITING_USER:
         actions.add("submit_turn")
@@ -254,7 +259,7 @@ def _public_state(state: DialogueState) -> dict[str, object]:
             "title": topic.contract.title,
             "guiding_question": topic.contract.guiding_question,
             "objective": topic.contract.objective,
-            "lens": topic.contract.starting_lens.value,
+            "lens": topic.lens.value,
             "lifecycle": topic.lifecycle.value,
             "evidence_health": topic.evidence_health.value,
             "question": question,
@@ -574,6 +579,14 @@ class BrowserApi:
             if type(question_id) is not str or type(answer) is not str:
                 raise BrowserApiError("VALIDATION_FAILED")
             return AnswerTopicClarificationIntent(question_id, answer)
+        if action == "set_lens" and set(body) == {"action", "lens"}:
+            lens = body["lens"]
+            if type(lens) is not str:
+                raise BrowserApiError("VALIDATION_FAILED")
+            try:
+                return SetLensIntent(Lens(lens))
+            except ValueError as exc:
+                raise BrowserApiError("VALIDATION_FAILED") from exc
         if action == "pause" and set(body) == {"action"}:
             return PauseTopicIntent()
         if action == "switch" and set(body) == {"action"}:

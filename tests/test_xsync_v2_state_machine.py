@@ -32,6 +32,7 @@ from xsync_v2.domain import (
     LearnerModelEntry,
     LearnerTurnSubmitted,
     Lens,
+    LensChanged,
     PauseTopic,
     PresentCandidates,
     QuestionIntent,
@@ -41,6 +42,7 @@ from xsync_v2.domain import (
     RequestTopicClarification,
     ResumeTopic,
     SelectTopic,
+    SetLens,
     SessionLifecycle,
     SessionStarted,
     StartSession,
@@ -252,6 +254,23 @@ def default_context(state, command):
             work_id=f"work-{command.learner_turn_id}",
             parent_turn_id=command.learner_turn_id,
         )
+    if isinstance(command, SetLens):
+        topic = state.active_topic
+        assert topic is not None
+        parent = (
+            topic.current_agent_turn.question_id
+            if topic.current_agent_turn is not None
+            else (
+                None
+                if topic.work is None
+                else topic.work.trigger.parent_turn_id
+            )
+        )
+        return context(
+            TriggerKind.LENS_CHANGED,
+            work_id=f"work-lens-{command.lens.value}",
+            parent_turn_id=parent,
+        )
     if isinstance(command, ResumeTopic):
         paused = next(
             item
@@ -456,6 +475,55 @@ class StateMachineTest(unittest.TestCase):
         )
         self.assertIsNone(state.topic_clarification)
         self.assertIsNotNone(state.active_topic)
+
+    def test_lens_change_replaces_the_visible_or_queued_turn(self):
+        state = apply(initial_dialogue_state("dlg-lens", 1), StartSession("start"))
+        state = apply(state, PresentCandidates("candidates", ("支付一致性",)))
+        state = apply(state, StartTopic("topic", contract()))
+        state = apply(state, CommitAgentTurn("opening", agent_turn()))
+        topic = state.active_topic
+        assert topic is not None
+        self.assertIs(Lens.MIXED, topic.lens)
+
+        same = SetLens("same-lens", Lens.MIXED)
+        self.assertEqual(
+            Rejected("LENS_UNCHANGED"),
+            decide(state, same, default_context(state, same)),
+        )
+        state = apply(state, SetLens("business-lens", Lens.BUSINESS))
+        topic = state.active_topic
+        assert topic is not None and topic.work is not None
+        self.assertIs(Lens.BUSINESS, topic.lens)
+        self.assertIsNone(topic.current_agent_turn)
+        self.assertIs(ConversationPhase.WAITING_HOST, state.phase)
+        self.assertIs(TriggerKind.LENS_CHANGED, topic.work.trigger.kind)
+        self.assertEqual("q1", topic.work.trigger.parent_turn_id)
+
+        prior_work_id = topic.work.work_id
+        state = apply(state, SetLens("technical-lens", Lens.TECHNICAL))
+        topic = state.active_topic
+        assert topic is not None and topic.work is not None
+        self.assertIs(Lens.TECHNICAL, topic.lens)
+        self.assertNotEqual(prior_work_id, topic.work.work_id)
+        self.assertEqual("q1", topic.work.trigger.parent_turn_id)
+
+        forged = LensChanged(
+            topic.topic_run_id,
+            Lens.BUSINESS,
+            replace(topic.work.trigger, parent_turn_id="wrong-question"),
+        )
+        with self.assertRaisesRegex(ValueError, "ILLEGAL_EVENT_TRANSITION"):
+            reduce(
+                state,
+                CommittedDialogueEvent(
+                    "event-forged-lens",
+                    state.sequence + 1,
+                    state.conversation_version,
+                    state.conversation_version + 1,
+                    "forged-lens",
+                    forged,
+                ),
+            )
 
     def test_socratic_turn_uses_one_canonical_path(self):
         state = initial_dialogue_state("dlg-1", 1)

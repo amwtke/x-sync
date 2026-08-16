@@ -4,11 +4,14 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import mock
 
+import tests.xsync_v2_path  # noqa: F401
+
 from xsync_v2.browser_service import (
     AnswerTopicClarificationIntent,
     BrowserCommandRequest,
     BrowserCommandService,
     SelectTopicIntent,
+    SetLensIntent,
 )
 from xsync_v2.coordinator import (
     CoordinatorError,
@@ -23,6 +26,7 @@ from xsync_v2.domain import (
     DecisionContext,
     EvidenceCheck,
     EvidenceHealth,
+    Lens,
     PresentCandidates,
     ReportWorkFailure,
     SelectTopic,
@@ -66,8 +70,6 @@ from xsync_v2.locking import DomainLockManager, RegistryLockMode
 from xsync_v2.observer import ObserverHub, StreamKind
 from xsync_v2.secure_fs import SecureDirectory
 from xsync_v2.work import RunnableWork, derive_runnable_work
-
-import tests.xsync_v2_path  # noqa: F401
 from tests.test_xsync_v2_state_machine import agent_turn, contract
 
 HOST = DialogueActor(ActorKind.HOST, "host.test")
@@ -238,6 +240,54 @@ class HostWorkServiceTest(unittest.TestCase):
         )
         self.assertIsNone(started.state.topic_clarification)
         self.assertIsNotNone(started.state.active_topic)
+
+    def test_lens_change_is_a_fresh_lease_fenced_dialogue_work(self) -> None:
+        opening_work, opening_fence = self.start_topic()
+        opening = self.service.publish_result(
+            HostResultPublishRequest(
+                "opening-before-lens-change",
+                opening_work,
+                DialogueTurnResult(agent_turn()),
+                self.config.created_at,
+                HOST,
+                opening_fence,
+            )
+        )
+        browser = BrowserCommandService(
+            self.coordinator,
+            lambda item: EvidenceCheck(
+                EvidenceHealth.CURRENT,
+                item.evidence_digest,
+            ),
+            clock=lambda: self.config.created_at,
+        )
+        changed = browser.execute(
+            BrowserCommandRequest(
+                "dlg-a",
+                "switch-to-technical-lens",
+                opening.state.conversation_version,
+                SetLensIntent(Lens.TECHNICAL),
+            )
+        )
+        assert changed.state.active_topic is not None
+        self.assertIs(Lens.TECHNICAL, changed.state.active_topic.lens)
+        lens_work = self.current_work()
+        self.assertIs(TriggerKind.LENS_CHANGED, lens_work.kind)
+        lens_fence = self.claim(lens_work, "lens-change")
+
+        continued = self.service.publish_result(
+            HostResultPublishRequest(
+                "technical-lens-turn",
+                lens_work,
+                DialogueTurnResult(agent_turn("q-technical")),
+                self.config.created_at,
+                HOST,
+                lens_fence,
+            )
+        )
+        self.assertIs(ConversationPhase.AWAITING_USER, continued.state.phase)
+        assert continued.state.active_topic is not None
+        self.assertIs(Lens.TECHNICAL, continued.state.active_topic.lens)
 
     def setUp(self) -> None:
         self.temporary = TemporaryDirectory()
