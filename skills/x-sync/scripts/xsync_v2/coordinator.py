@@ -33,6 +33,7 @@ from .domain import (
     DialogueState,
     EvidenceCheck,
     EvidenceHealth,
+    ExportRequested,
     FencedQuiesceContext,
     PauseCause,
     PendingDialogueEvent,
@@ -71,6 +72,7 @@ from .event_store import (
     _DialogueTransactionLog,
     session_directory_component,
 )
+from .export import plan_export_intent
 from .locking import (
     DomainLockManager,
     LockError,
@@ -1749,6 +1751,11 @@ class DialogueCoordinator:
             tuple(
                 EventMetadata(occurred_at, actor, causation_id)
                 for _ in events
+            ),
+            tuple(
+                plan_export_intent(tip.state.session_id, item.payload)
+                for item in pending
+                if type(item.payload) is ExportRequested
             ),
         )
         return self._commit_dialogue_request(

@@ -11,6 +11,8 @@ from .domain import (
     AgentTurnCommitted,
     CandidatesPresented,
     CommittedDialogueEvent,
+    ExportCompleted,
+    ExportRequested,
     HelpRequested,
     LearnerTurnSubmitted,
     LensChanged,
@@ -302,6 +304,26 @@ def _dialogue_payload_view(event: CommittedDialogueEvent) -> ImmutablePayloadVie
         return ImmutablePayloadView("work_requeued", ())
     if type(payload) is WorkRecoveryRequested:
         return ImmutablePayloadView("work_recovery_requested", ())
+    if type(payload) is ExportRequested:
+        return ImmutablePayloadView(
+            "export_requested",
+            _fields(
+                ("export_id", payload.export_id),
+                ("export_sequence", str(payload.export_sequence)),
+            ),
+        )
+    if type(payload) is ExportCompleted:
+        return ImmutablePayloadView(
+            "export_completed",
+            _fields(
+                ("export_id", payload.export_id),
+                ("export_sequence", str(payload.export_sequence)),
+                ("json_path", payload.json_path),
+                ("json_digest", payload.json_digest),
+                ("markdown_path", payload.markdown_path),
+                ("markdown_digest", payload.markdown_digest),
+            ),
+        )
     raise AfterCommitError("UNKNOWN_DIALOGUE_EVENT")
 
 

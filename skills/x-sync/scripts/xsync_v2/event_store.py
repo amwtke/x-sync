@@ -11,6 +11,7 @@ from typing import cast
 from .domain import (
     CommittedDialogueEvent,
     DialogueState,
+    ExportCompleted,
     PauseCause,
     SessionDeactivationPrepared,
     TopicPaused,
@@ -381,6 +382,26 @@ class _DialogueTransactionLog:
             result.extend(marker.effect_intents)
             first = marker.to_sequence + 1
         return tuple(result)
+
+    def read_pending_effect_intents(self) -> tuple[DurableEffectIntent, ...]:
+        """Return committed intents without a matching completion event."""
+        intents = self.read_effect_intents()
+        completed = frozenset(
+            event.payload.intent_id
+            for event in self.read_committed(after_sequence=0)
+            if type(event.payload) is ExportCompleted
+        )
+        return tuple(item for item in intents if item.intent_id not in completed)
+
+    def state_at_sequence(self, sequence: int) -> DialogueState:
+        """Replay the exact marker-boundary state at ``sequence``."""
+        self._require_open()
+        if type(sequence) is not int or sequence < 0:
+            raise DialogueStoreError("INVALID_SEQUENCE")
+        self._synchronize()
+        if sequence > self._tip.state.sequence:
+            raise DialogueStoreError("TRANSACTION_SEQUENCE_GAP")
+        return self._tip_at_sequence(sequence).state
 
     def commit(
         self,

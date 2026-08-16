@@ -23,6 +23,8 @@ from xsync_v2.domain import (
     CommittedDialogueEvent,
     EvidenceCheck,
     EvidenceHealth,
+    ExportCompleted,
+    ExportRequested,
     HelpRequested,
     LearnerTurnSubmitted,
     Lens,
@@ -365,6 +367,33 @@ class DispatchTest(unittest.TestCase):
                 8,
                 TopicExplorationRequested(trigger()),
             ),
+            dialogue_event(
+                "event-9",
+                9,
+                ExportRequested(
+                    "export-1",
+                    1,
+                    "intent-export-1",
+                    8,
+                    "2026-08-16T12:00:00+08:00",
+                    "sha256:" + "4" * 64,
+                ),
+            ),
+            dialogue_event(
+                "event-10",
+                10,
+                ExportCompleted(
+                    "export-1",
+                    1,
+                    "intent-export-1",
+                    "2026-08-16T12:00:01+08:00",
+                    "insights.export-1.json",
+                    "sha256:" + "5" * 64,
+                    "insights.export-1.md",
+                    "sha256:" + "6" * 64,
+                    "sha256:" + "7" * 64,
+                ),
+            ),
         )
 
         mapped = dialogue_batch("session-1", events)
@@ -379,22 +408,28 @@ class DispatchTest(unittest.TestCase):
                 "lens_changed",
                 "help_requested",
                 "topic_exploration_requested",
+                "export_requested",
+                "export_completed",
             ),
             tuple(item.payload.tag for item in mapped.events),
         )
         self.assertEqual(
             "true",
-            dict(mapped.events[-4].payload.fields)["requires_reground"],
+            dict(mapped.events[-6].payload.fields)["requires_reground"],
         )
         self.assertEqual(
             "technical",
-            dict(mapped.events[-3].payload.fields)["lens"],
+            dict(mapped.events[-5].payload.fields)["lens"],
         )
         self.assertEqual(
             "question-1",
-            dict(mapped.events[-2].payload.fields)["question_id"],
+            dict(mapped.events[-4].payload.fields)["question_id"],
         )
-        self.assertEqual((), mapped.events[-1].payload.fields)
+        self.assertEqual((), mapped.events[-3].payload.fields)
+        self.assertEqual(
+            "export-1",
+            dict(mapped.events[-1].payload.fields)["export_id"],
+        )
 
     def test_topic_completion_maps_summary_without_internal_proof(self):
         summary = TopicSummary(

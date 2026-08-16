@@ -22,6 +22,7 @@ from .domain import (
     AgentTurnResult,
     AnswerTopicClarification,
     CandidatesPresented,
+    CompleteExport,
     CompleteTopic,
     CommitAgentTurn,
     CommittedDialogueEvent,
@@ -30,6 +31,9 @@ from .domain import (
     DialogueCommand,
     DialogueState,
     EvidenceCheck,
+    ExportCompleted,
+    ExportRecord,
+    ExportRequested,
     ExploreTopics,
     GateAssessment,
     GateRequirement,
@@ -40,6 +44,7 @@ from .domain import (
     PauseTopic,
     PresentCandidates,
     RecoverWork,
+    RequestExport,
     RequestHelp,
     ReportWorkFailure,
     RequestTopicClarification,
@@ -222,6 +227,7 @@ DOMAIN_TYPES = frozenset(
         AgentTurnResult,
         AnswerTopicClarification,
         CandidatesPresented,
+        CompleteExport,
         CompleteTopic,
         CommittedDialogueEvent,
         CommitAgentTurn,
@@ -229,6 +235,9 @@ DOMAIN_TYPES = frozenset(
         DecisionContext,
         DialogueState,
         EvidenceCheck,
+        ExportCompleted,
+        ExportRecord,
+        ExportRequested,
         ExploreTopics,
         GateAssessment,
         GateRequirement,
@@ -239,6 +248,7 @@ DOMAIN_TYPES = frozenset(
         PauseTopic,
         PresentCandidates,
         RecoverWork,
+        RequestExport,
         RequestHelp,
         ReportWorkFailure,
         RequestTopicClarification,
@@ -310,6 +320,8 @@ EVENT_TYPE_BY_PAYLOAD = {
     WorkRequeued: "work_requeued",
     WorkDeadLettered: "work_dead_lettered",
     WorkRecoveryRequested: "work_recovery_requested",
+    ExportRequested: "export_requested",
+    ExportCompleted: "export_completed",
 }
 
 
@@ -708,6 +720,8 @@ def dialogue_request_digest(record: DialogueWriteRequestRecord) -> str:
             ResumeTopic,
             ReportWorkFailure,
             RecoverWork,
+            RequestExport,
+            CompleteExport,
         }
         or type(record.context) is not DecisionContext
     ):

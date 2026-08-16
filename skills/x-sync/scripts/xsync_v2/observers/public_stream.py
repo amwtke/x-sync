@@ -58,6 +58,15 @@ _PUBLIC_FIELD_ORDER: dict[str, tuple[str, ...]] = {
         "next_suggestion",
     ),
     "topic_exploration_requested": (),
+    "export_requested": ("export_id", "export_sequence"),
+    "export_completed": (
+        "export_id",
+        "export_sequence",
+        "json_path",
+        "json_digest",
+        "markdown_path",
+        "markdown_digest",
+    ),
 }
 
 

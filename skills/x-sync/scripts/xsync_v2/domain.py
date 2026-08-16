@@ -131,6 +131,13 @@ class PauseCause(StrEnum):
     SESSION_DEACTIVATION = "session_deactivation"
 
 
+class ExportStatus(StrEnum):
+    """Canonical lifecycle of one deterministic export request."""
+
+    REQUESTED = "requested"
+    COMPLETED = "completed"
+
+
 @dataclass(frozen=True, slots=True)
 class GateRequirement:
     gate_id: GateId
@@ -315,6 +322,7 @@ class DialogueState:
     selected_candidate: str | None = None
     topic_clarification: TopicClarification | None = None
     completed_topics: tuple[TopicRunState, ...] = ()
+    exports: tuple[ExportRecord, ...] = ()
 
     @property
     def session_unresolved_trigger(self) -> TriggerBinding | None:
@@ -458,6 +466,32 @@ class RecoverWork:
 
 
 @dataclass(frozen=True, slots=True)
+class RequestExport:
+    """Capture one immutable dialogue snapshot for later materialization."""
+
+    command_id: str
+    export_id: str
+    intent_id: str
+    requested_at: str
+    payload_digest: str
+
+
+@dataclass(frozen=True, slots=True)
+class CompleteExport:
+    """Commit the verified artifact pair produced for one durable intent."""
+
+    command_id: str
+    export_id: str
+    intent_id: str
+    completed_at: str
+    json_path: str
+    json_digest: str
+    markdown_path: str
+    markdown_digest: str
+    freshness_overlay_digest: str
+
+
+@dataclass(frozen=True, slots=True)
 class PrepareSessionDeactivation:
     command_id: str
 
@@ -489,7 +523,28 @@ DialogueCommand: TypeAlias = (
     | ResumeTopic
     | ReportWorkFailure
     | RecoverWork
+    | RequestExport
+    | CompleteExport
 )
+
+
+@dataclass(frozen=True, slots=True)
+class ExportRecord:
+    """Canonical request/completion ledger entry for one export pair."""
+
+    export_id: str
+    export_sequence: int
+    intent_id: str
+    as_of_event_sequence: int
+    requested_at: str
+    payload_digest: str
+    status: ExportStatus
+    completed_at: str | None = None
+    json_path: str | None = None
+    json_digest: str | None = None
+    markdown_path: str | None = None
+    markdown_digest: str | None = None
+    freshness_overlay_digest: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -664,6 +719,33 @@ class WorkRecoveryRequested:
     evidence: EvidenceCheck
 
 
+@dataclass(frozen=True, slots=True)
+class ExportRequested:
+    """Version-neutral capture of one export snapshot and durable intent."""
+
+    export_id: str
+    export_sequence: int
+    intent_id: str
+    as_of_event_sequence: int
+    requested_at: str
+    payload_digest: str
+
+
+@dataclass(frozen=True, slots=True)
+class ExportCompleted:
+    """Version-neutral commit marker for one verified JSON/Markdown pair."""
+
+    export_id: str
+    export_sequence: int
+    intent_id: str
+    completed_at: str
+    json_path: str
+    json_digest: str
+    markdown_path: str
+    markdown_digest: str
+    freshness_overlay_digest: str
+
+
 DialogueEventPayload: TypeAlias = (
     SessionStarted
     | CandidatesPresented
@@ -685,6 +767,8 @@ DialogueEventPayload: TypeAlias = (
     | WorkRequeued
     | WorkDeadLettered
     | WorkRecoveryRequested
+    | ExportRequested
+    | ExportCompleted
 )
 
 

@@ -16,6 +16,7 @@ from xsync_v2.domain import (
     AnswerTopicClarification,
     CandidatesPresented,
     CommitAgentTurn,
+    CompleteExport,
     CompleteTopic,
     CommittedDialogueEvent,
     ConversationPhase,
@@ -24,6 +25,7 @@ from xsync_v2.domain import (
     EvidenceCheck,
     EvidenceHealth,
     ExploreTopics,
+    ExportStatus,
     GateAssessment,
     GateId,
     GateRequirement,
@@ -43,6 +45,7 @@ from xsync_v2.domain import (
     Rejected,
     ReportWorkFailure,
     RequestHelp,
+    RequestExport,
     RequestTopicClarification,
     ResumeTopic,
     SelectTopic,
@@ -336,6 +339,51 @@ def apply(state, command, decision_context=None):
 
 
 class StateMachineTest(unittest.TestCase):
+    def test_export_request_and_completion_are_version_neutral_and_replayable(self):
+        state = apply(initial_dialogue_state("dlg-1", 1), StartSession("start"))
+        before_version = state.conversation_version
+        request = RequestExport(
+            "export-request",
+            "export-1",
+            "intent-export-1",
+            "2026-08-16T12:00:00+08:00",
+            digest("export-payload"),
+        )
+        requested = apply(state, request, context())
+        self.assertEqual(before_version, requested.conversation_version)
+        self.assertEqual(1, len(requested.exports))
+        export = requested.exports[0]
+        self.assertEqual(ExportStatus.REQUESTED, export.status)
+        self.assertEqual(state.sequence, export.as_of_event_sequence)
+
+        complete = CompleteExport(
+            "export-complete",
+            "export-1",
+            "intent-export-1",
+            "2026-08-16T12:00:01+08:00",
+            "insights.20260816T120000.export-1.json",
+            digest("json"),
+            "insights.20260816T120000.export-1.md",
+            digest("markdown"),
+            digest("overlay"),
+        )
+        completed = apply(requested, complete, context())
+        self.assertEqual(before_version, completed.conversation_version)
+        self.assertEqual(ExportStatus.COMPLETED, completed.exports[0].status)
+        self.assertEqual(digest("json"), completed.exports[0].json_digest)
+
+        self.assertEqual(
+            Rejected("IDEMPOTENCY_CONFLICT"),
+            decide(completed, request, context()),
+        )
+        ended = replace(
+            state,
+            lifecycle=SessionLifecycle.ENDED,
+            phase=ConversationPhase.NONE,
+            session_work=None,
+        )
+        self.assertIsInstance(decide(ended, request, context()), Accepted)
+
     def test_topic_selection_is_durable_work_before_host_contract(self):
         state = apply(initial_dialogue_state("dlg-1", 1), StartSession("start"))
         state = apply(

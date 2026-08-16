@@ -26,6 +26,7 @@ from xsync_v2.domain import (
     PresentCandidates,
     RecoverWork,
     ReportWorkFailure,
+    RequestExport,
     SessionLifecycle,
     SelectTopic,
     StartTopic,
@@ -303,6 +304,51 @@ class CoordinatorTest(unittest.TestCase):
             )
         )
         return committed
+
+    def test_export_request_commits_its_durable_intent_atomically(self):
+        resolution = self.coordinator().resolve(config("dlg-a"))
+        state = resolution.dialogue_state
+        outcome = self.coordinator().execute(
+            DialogueExecutionRequest(
+                state.session_id,
+                state.conversation_version,
+                RequestExport(
+                    "cmd.export.request",
+                    "export-1",
+                    "intent-export-1",
+                    "2026-08-16T12:00:00+08:00",
+                    digest("export-request"),
+                ),
+                DecisionContext(
+                    resolution.registry_state.generation,
+                    None,
+                    EvidenceCheck(
+                        EvidenceHealth.CURRENT,
+                        resolution.config.evidence_digest,
+                    ),
+                ),
+                "2026-08-16T12:00:00+08:00",
+                LEARNER,
+            )
+        )
+        self.assertEqual(
+            state.conversation_version,
+            outcome.state.conversation_version,
+        )
+        with self.locks.semantic_session("dlg-a") as authority:
+            log = _DialogueTransactionLog.open_existing(
+                self.dialogues,
+                initial_dialogue_state("dlg-a", 1),
+                self.locks,
+                authority,
+            )
+            try:
+                intents = log.read_pending_effect_intents()
+            finally:
+                log.close()
+        self.assertEqual(1, len(intents))
+        self.assertEqual("intent-export-1", intents[0].intent_id)
+        self.assertEqual(state.sequence, intents[0].as_of_sequence)
 
     def test_first_creation_persists_config_bootstraps_and_resumes(self):
         config_a = config("dlg-a")

@@ -13,6 +13,7 @@ from .domain import (
     AnswerTopicClarification,
     CandidatesPresented,
     CompleteTopic,
+    CompleteExport,
     CommitAgentTurn,
     CommittedDialogueEvent,
     ConversationPhase,
@@ -24,6 +25,10 @@ from .domain import (
     DialogueState,
     EvidenceCheck,
     EvidenceHealth,
+    ExportCompleted,
+    ExportRecord,
+    ExportRequested,
+    ExportStatus,
     ExploreTopics,
     FencedQuiesceContext,
     GateAssessment,
@@ -48,6 +53,7 @@ from .domain import (
     Rejected,
     ReportWorkFailure,
     RequestHelp,
+    RequestExport,
     RequestTopicClarification,
     ResumeTopic,
     SelectTopic,
@@ -135,7 +141,12 @@ RETRYABLE_WORK_FAILURES = frozenset(
 
 def conversation_version_delta(payload: DialogueEventPayload) -> int:
     """Return the single canonical version effect for a dialogue fact."""
-    if type(payload) in {WorkFailed, WorkRequeued}:
+    if type(payload) in {
+        WorkFailed,
+        WorkRequeued,
+        ExportRequested,
+        ExportCompleted,
+    }:
         return 0
     if type(payload) in EVENT_PAYLOAD_TYPES:
         return 1
@@ -266,6 +277,40 @@ def _valid_work_failure(failure: object) -> bool:
         and type(failure.category) is WorkFailureCategory
         and _valid_text(failure.safe_error_code)
         and is_sha256_digest(failure.proof_digest)
+    )
+
+
+def _valid_export_record(value: object, observed_sequence: int) -> bool:
+    if type(value) is not ExportRecord:
+        return False
+    record = value
+    common = (
+        is_protocol_id(record.export_id)
+        and _valid_positive_int(record.export_sequence)
+        and is_protocol_id(record.intent_id)
+        and _valid_nonnegative_int(record.as_of_event_sequence)
+        and record.as_of_event_sequence <= observed_sequence
+        and _valid_text(record.requested_at)
+        and is_sha256_digest(record.payload_digest)
+        and type(record.status) is ExportStatus
+    )
+    completion = (
+        record.completed_at,
+        record.json_path,
+        record.json_digest,
+        record.markdown_path,
+        record.markdown_digest,
+        record.freshness_overlay_digest,
+    )
+    if record.status is ExportStatus.REQUESTED:
+        return common and completion == (None, None, None, None, None, None)
+    return common and (
+        _valid_text(record.completed_at)
+        and is_protocol_id(record.json_path)
+        and is_sha256_digest(record.json_digest)
+        and is_protocol_id(record.markdown_path)
+        and is_sha256_digest(record.markdown_digest)
+        and is_sha256_digest(record.freshness_overlay_digest)
     )
 
 
@@ -1542,6 +1587,82 @@ def _recover_work(
     )
 
 
+def _request_export(
+    state: DialogueState, command: DialogueCommand, context: DecisionContext
+) -> Decision:
+    if type(command) is not RequestExport:
+        return Rejected("TOPIC_STATE_CONFLICT")
+    if (
+        not is_protocol_id(command.export_id)
+        or not is_protocol_id(command.intent_id)
+        or not _valid_text(command.requested_at)
+        or not is_sha256_digest(command.payload_digest)
+        or context.trigger is not None
+    ):
+        return Rejected("VALIDATION_FAILED")
+    if any(
+        item.export_id == command.export_id
+        or item.intent_id == command.intent_id
+        for item in state.exports
+    ):
+        return Rejected("IDEMPOTENCY_CONFLICT")
+    return _accept(
+        command.command_id,
+        ExportRequested(
+            command.export_id,
+            len(state.exports) + 1,
+            command.intent_id,
+            state.sequence,
+            command.requested_at,
+            command.payload_digest,
+        ),
+    )
+
+
+def _complete_export(
+    state: DialogueState, command: DialogueCommand, context: DecisionContext
+) -> Decision:
+    if type(command) is not CompleteExport:
+        return Rejected("TOPIC_STATE_CONFLICT")
+    if (
+        not is_protocol_id(command.export_id)
+        or not is_protocol_id(command.intent_id)
+        or not _valid_text(command.completed_at)
+        or not is_protocol_id(command.json_path)
+        or not is_sha256_digest(command.json_digest)
+        or not is_protocol_id(command.markdown_path)
+        or not is_sha256_digest(command.markdown_digest)
+        or not is_sha256_digest(command.freshness_overlay_digest)
+        or context.trigger is not None
+    ):
+        return Rejected("VALIDATION_FAILED")
+    matches = tuple(
+        item for item in state.exports if item.export_id == command.export_id
+    )
+    if len(matches) != 1:
+        return Rejected("TOPIC_STATE_CONFLICT")
+    export = matches[0]
+    if (
+        export.status is not ExportStatus.REQUESTED
+        or export.intent_id != command.intent_id
+    ):
+        return Rejected("IDEMPOTENCY_CONFLICT")
+    return _accept(
+        command.command_id,
+        ExportCompleted(
+            export.export_id,
+            export.export_sequence,
+            export.intent_id,
+            command.completed_at,
+            command.json_path,
+            command.json_digest,
+            command.markdown_path,
+            command.markdown_digest,
+            command.freshness_overlay_digest,
+        ),
+    )
+
+
 TRANSITION_TABLE: dict[type, Handler] = {
     StartSession: _start_session,
     PresentCandidates: _present_candidates,
@@ -1561,6 +1682,8 @@ TRANSITION_TABLE: dict[type, Handler] = {
     ResumeTopic: _resume_topic,
     ReportWorkFailure: _report_work_failure,
     RecoverWork: _recover_work,
+    RequestExport: _request_export,
+    CompleteExport: _complete_export,
 }
 
 
@@ -1597,10 +1720,16 @@ def decide(
         return Rejected("TOPIC_STATE_CONFLICT")
     if not is_protocol_id(command.command_id):
         return Rejected("VALIDATION_FAILED")
-    if (
-        type(command) is not StartSession
-        and state.lifecycle is not SessionLifecycle.OPEN
-    ):
+    if type(command) is StartSession:
+        lifecycle_allowed = state.lifecycle is SessionLifecycle.NEW
+    elif type(command) in {RequestExport, CompleteExport}:
+        lifecycle_allowed = state.lifecycle in {
+            SessionLifecycle.OPEN,
+            SessionLifecycle.ENDED,
+        }
+    else:
+        lifecycle_allowed = state.lifecycle is SessionLifecycle.OPEN
+    if not lifecycle_allowed:
         return Rejected("TOPIC_STATE_CONFLICT")
     return handler(state, command, context)
 
@@ -1689,6 +1818,7 @@ def validate_state(state: DialogueState) -> None:
         or type(state.candidates) is not tuple
         or type(state.paused_topics) is not tuple
         or type(state.completed_topics) is not tuple
+        or type(state.exports) is not tuple
         or (
             state.selected_candidate is not None
             and not _valid_text(state.selected_candidate)
@@ -1722,6 +1852,10 @@ def validate_state(state: DialogueState) -> None:
             type(item) is not TopicRunState
             for item in state.completed_topics
         )
+        or any(
+            not _valid_export_record(item, state.sequence)
+            for item in state.exports
+        )
     ):
         raise ValueError("STATE_INVARIANT_VIOLATION")
     if state.lifecycle is SessionLifecycle.NEW and (
@@ -1730,6 +1864,7 @@ def validate_state(state: DialogueState) -> None:
         or state.session_work is not None
         or state.paused_topics
         or state.completed_topics
+        or state.exports
     ):
         raise ValueError("STATE_INVARIANT_VIOLATION")
     if state.lifecycle is SessionLifecycle.ENDED and (
@@ -1890,6 +2025,15 @@ def validate_state(state: DialogueState) -> None:
         or len(all_topic_ids) != len(set(all_topic_ids))
     ):
         raise ValueError("STATE_INVARIANT_VIOLATION")
+    export_ids = tuple(item.export_id for item in state.exports)
+    intent_ids = tuple(item.intent_id for item in state.exports)
+    if (
+        tuple(item.export_sequence for item in state.exports)
+        != tuple(range(1, len(state.exports) + 1))
+        or len(export_ids) != len(set(export_ids))
+        or len(intent_ids) != len(set(intent_ids))
+    ):
+        raise ValueError("STATE_INVARIANT_VIOLATION")
 
 
 EVENT_PAYLOAD_TYPES = frozenset(
@@ -1914,6 +2058,8 @@ EVENT_PAYLOAD_TYPES = frozenset(
         WorkRequeued,
         WorkDeadLettered,
         WorkRecoveryRequested,
+        ExportRequested,
+        ExportCompleted,
     }
 )
 
@@ -2062,6 +2208,27 @@ def _valid_event_payload_shape(payload: object) -> bool:
             and type(payload.action) is WorkRecoveryAction
             and is_canonical_trigger_binding(payload.next_trigger)
             and _valid_evidence_shape(payload.evidence)
+        )
+    if type(payload) is ExportRequested:
+        return (
+            is_protocol_id(payload.export_id)
+            and _valid_positive_int(payload.export_sequence)
+            and is_protocol_id(payload.intent_id)
+            and _valid_nonnegative_int(payload.as_of_event_sequence)
+            and _valid_text(payload.requested_at)
+            and is_sha256_digest(payload.payload_digest)
+        )
+    if type(payload) is ExportCompleted:
+        return (
+            is_protocol_id(payload.export_id)
+            and _valid_positive_int(payload.export_sequence)
+            and is_protocol_id(payload.intent_id)
+            and _valid_text(payload.completed_at)
+            and is_protocol_id(payload.json_path)
+            and is_sha256_digest(payload.json_digest)
+            and is_protocol_id(payload.markdown_path)
+            and is_sha256_digest(payload.markdown_digest)
+            and is_sha256_digest(payload.freshness_overlay_digest)
         )
     return False
 
@@ -2892,6 +3059,79 @@ def reduce(
                     active_topic=recovered_topic,
                     phase=ConversationPhase.WAITING_HOST,
                 )
+    elif type(payload) is ExportRequested:
+        _require(
+            state.lifecycle in {SessionLifecycle.OPEN, SessionLifecycle.ENDED}
+            and is_protocol_id(payload.export_id)
+            and payload.export_sequence == len(state.exports) + 1
+            and is_protocol_id(payload.intent_id)
+            and payload.as_of_event_sequence == state.sequence
+            and _valid_text(payload.requested_at)
+            and is_sha256_digest(payload.payload_digest)
+            and all(
+                item.export_id != payload.export_id
+                and item.intent_id != payload.intent_id
+                for item in state.exports
+            )
+        )
+        next_state = replace(
+            next_state,
+            exports=(
+                *state.exports,
+                ExportRecord(
+                    payload.export_id,
+                    payload.export_sequence,
+                    payload.intent_id,
+                    payload.as_of_event_sequence,
+                    payload.requested_at,
+                    payload.payload_digest,
+                    ExportStatus.REQUESTED,
+                ),
+            ),
+        )
+    elif type(payload) is ExportCompleted:
+        _require(
+            state.lifecycle in {SessionLifecycle.OPEN, SessionLifecycle.ENDED}
+            and is_protocol_id(payload.export_id)
+            and _valid_positive_int(payload.export_sequence)
+            and is_protocol_id(payload.intent_id)
+            and _valid_text(payload.completed_at)
+            and is_protocol_id(payload.json_path)
+            and is_sha256_digest(payload.json_digest)
+            and is_protocol_id(payload.markdown_path)
+            and is_sha256_digest(payload.markdown_digest)
+            and is_sha256_digest(payload.freshness_overlay_digest)
+        )
+        export_matches = tuple(
+            item for item in state.exports
+            if item.export_id == payload.export_id
+        )
+        _require(
+            len(export_matches) == 1
+            and export_matches[0].status is ExportStatus.REQUESTED
+            and export_matches[0].export_sequence == payload.export_sequence
+            and export_matches[0].intent_id == payload.intent_id
+        )
+        next_state = replace(
+            next_state,
+            exports=tuple(
+                replace(
+                    item,
+                    status=ExportStatus.COMPLETED,
+                    completed_at=payload.completed_at,
+                    json_path=payload.json_path,
+                    json_digest=payload.json_digest,
+                    markdown_path=payload.markdown_path,
+                    markdown_digest=payload.markdown_digest,
+                    freshness_overlay_digest=(
+                        payload.freshness_overlay_digest
+                    ),
+                )
+                if item.export_id == payload.export_id
+                else item
+                for item in state.exports
+            ),
+        )
     else:
         raise ValueError("UNKNOWN_EVENT")
 
