@@ -32,13 +32,14 @@ from .lease_store import (
     LeaseStore,
     RuntimeAuthorityVerifier,
 )
-from .locking import DomainLockManager
+from .locking import DomainLockManager, RuntimeOwnerAuthority
 from .observer import ObserverHub
 from .observers.public_stream import PublicStreamObserver
 from .observers.work_wake import WorkWakeHint, WorkWakeObserver
 from .repository_context import RepositoryHostContextProvider
 from .secure_fs import SecureDirectory
 from .submission_store import SubmissionHandleStore
+from .runtime_owner import RuntimeEpochAuthority
 
 
 class DialogueRuntimeError(RuntimeError):
@@ -103,7 +104,7 @@ class DialogueRuntime:
         context_provider: HostContextProvider | None = None,
         repository_directory: str | os.PathLike[str] | None = None,
         repository_id: str | None = None,
-        runtime_authority_verifier: RuntimeAuthorityVerifier,
+        runtime_authority_verifier: RuntimeAuthorityVerifier | None = None,
         lease_clock: LeaseClock,
         browser_clock: BrowserClock,
         monotonic_clock: MonotonicClock,
@@ -128,10 +129,12 @@ class DialogueRuntime:
         locks: DomainLockManager | None = None
         evidence_store: SessionEvidenceStore | None = None
         submission_store: SubmissionHandleStore | None = None
+        runtime_owner: RuntimeOwnerAuthority | None = None
         try:
             root = SecureDirectory.open(path)
             dialogues = root.ensure_directory("dialogues")
             locks = DomainLockManager(path / "locks")
+            runtime_owner = locks.acquire_runtime_owner(runtime_epoch)
             if repository_mode:
                 assert repository_directory is not None
                 assert repository_id is not None
@@ -176,7 +179,11 @@ class DialogueRuntime:
                         authority,
                     )
                 ),
-                runtime_authority_verifier=runtime_authority_verifier,
+                runtime_authority_verifier=(
+                    RuntimeEpochAuthority(locks, runtime_owner)
+                    if runtime_authority_verifier is None
+                    else runtime_authority_verifier
+                ),
             )
             submission_store = SubmissionHandleStore(dialogues, locks)
             work_service = HostWorkService(coordinator, leases, submission_store)
@@ -221,6 +228,7 @@ class DialogueRuntime:
         self._locks = locks
         self._coordinator = coordinator
         self._leases = leases
+        self._runtime_owner = runtime_owner
         self._work_service = work_service
         self._submission_store = submission_store
         self._host_control = host_control

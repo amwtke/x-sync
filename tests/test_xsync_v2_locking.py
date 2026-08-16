@@ -1,3 +1,4 @@
+# ruff: noqa: I001
 from __future__ import annotations
 
 import errno
@@ -21,6 +22,7 @@ from xsync_v2.locking import (
     LockError,
     RegistryLockAuthority,
     RegistryLockMode,
+    RuntimeOwnerAuthority,
     SessionLockAuthority,
 )
 
@@ -115,6 +117,21 @@ def _try_lock_after_file_replacement(
         manager.close()
 
 
+def _hold_runtime_owner(
+    lock_directory: str,
+    ready: multiprocessing.synchronize.Event,
+    release: multiprocessing.synchronize.Event,
+) -> None:
+    manager = DomainLockManager(lock_directory)
+    authority = manager.acquire_runtime_owner("runtime-holder")
+    authority.assert_valid()
+    ready.set()
+    if not release.wait(10):
+        raise RuntimeError("TEST_COORDINATION_TIMEOUT")
+    manager.release_runtime_owner(authority)
+    manager.close()
+
+
 class LockingTest(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary_directory = tempfile.TemporaryDirectory(dir=Path.cwd())
@@ -178,6 +195,111 @@ class LockingTest(unittest.TestCase):
         process.join(10)
         self.assertFalse(process.is_alive())
         self.assertEqual(0, process.exitcode)
+
+    def test_runtime_owner_is_process_wide_and_released_cleanly(self) -> None:
+        context = multiprocessing.get_context("spawn")
+        ready = context.Event()
+        release = context.Event()
+        process = context.Process(
+            target=_hold_runtime_owner,
+            args=(str(self.lock_directory), ready, release),
+        )
+        process.start()
+        self.assertTrue(ready.wait(10))
+
+        contender = self.manager()
+        self.assert_lock_error(
+            "RUNTIME_ALREADY_RUNNING",
+            lambda: contender.acquire_runtime_owner("runtime-contender"),
+        )
+        release.set()
+        process.join(10)
+        self.assertFalse(process.is_alive())
+        self.assertEqual(0, process.exitcode)
+
+        authority = contender.acquire_runtime_owner("runtime-contender")
+        self.assertEqual("runtime-contender", authority.runtime_epoch)
+        with contender.semantic_session("dlg-owner") as session:
+            session.assert_can_commit("dlg-owner")
+            authority.assert_valid()
+        contender.release_runtime_owner(authority)
+        self.assert_lock_error(
+            "RUNTIME_OWNER_AUTHORITY_INVALID",
+            authority.assert_valid,
+        )
+
+    def test_runtime_owner_is_cross_thread_exact_and_fail_closed(self) -> None:
+        manager = self.manager()
+        authority = manager.acquire_runtime_owner("runtime-1")
+        results: list[str] = []
+
+        def validate() -> None:
+            try:
+                manager.assert_runtime_owner_authority(authority)
+            except LockError as exc:
+                results.append(exc.code)
+            else:
+                results.append(authority.runtime_epoch)
+
+        thread = threading.Thread(target=validate)
+        thread.start()
+        thread.join(10)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(["runtime-1"], results)
+        self.assert_lock_error(
+            "RUNTIME_OWNER_ALREADY_ACQUIRED",
+            lambda: manager.acquire_runtime_owner("runtime-2"),
+        )
+
+        foreign = DomainLockManager(
+            Path(self.temporary_directory.name) / "foreign-owner-locks"
+        )
+        self.addCleanup(foreign.close)
+        self.assert_lock_error(
+            "RUNTIME_OWNER_AUTHORITY_INVALID",
+            lambda: foreign.assert_runtime_owner_authority(authority),
+        )
+        self.assert_lock_error(
+            "LOCK_AUTHORITY_CONSTRUCTION_FORBIDDEN",
+            RuntimeOwnerAuthority,
+        )
+        manager.close()
+        self.assert_lock_error(
+            "RUNTIME_OWNER_AUTHORITY_INVALID",
+            authority.assert_valid,
+        )
+
+    def test_runtime_owner_rejects_bad_epoch_and_lock_file_replacement(self) -> None:
+        manager = self.manager()
+        for epoch in (None, "", "bad/epoch", "bad\x00epoch"):
+            with self.subTest(epoch=epoch):
+                self.assert_lock_error(
+                    "INVALID_RUNTIME_EPOCH",
+                    lambda epoch=epoch: manager.acquire_runtime_owner(epoch),
+                )
+
+        authority = manager.acquire_runtime_owner("runtime-1")
+        owner_path = self.lock_directory / "runtime-owner.lock"
+        owner_path.unlink()
+        descriptor = os.open(
+            owner_path,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+            0o600,
+        )
+        os.close(descriptor)
+        owner_path.chmod(0o600)
+        self.assert_lock_error(
+            "LOCK_NAMESPACE_CHANGED",
+            authority.assert_valid,
+        )
+        owner_path.unlink()
+        os.link(
+            self.lock_directory / ".runtime-owner.lock.identity",
+            owner_path,
+            follow_symlinks=False,
+        )
+        authority.assert_valid()
+        manager.release_runtime_owner(authority)
 
     def test_session_exclusive_is_released_when_owner_process_crashes(self) -> None:
         context = multiprocessing.get_context("spawn")

@@ -105,6 +105,7 @@ from xsync_v2.lease_store import (
     LeaseExhaustionProof,
     LeaseStore,
 )
+from xsync_v2.locking import RuntimeOwnerAuthority
 from xsync_v2.observer import ObserverHub
 from xsync_v2.observers.public_stream import (
     PublicStreamObserver,
@@ -113,6 +114,9 @@ from xsync_v2.observers.public_stream import (
 from xsync_v2.observers.work_wake import WorkWakeObserver
 from xsync_v2.repository_context import RepositoryHostContextProvider
 from xsync_v2.runtime import DialogueRuntime, DialogueRuntimeError
+from xsync_v2.runtime_cli import RuntimeCliError
+from xsync_v2.runtime_cli import main as runtime_cli_main
+from xsync_v2.runtime_owner import RuntimeEpochAuthority
 from xsync_v2.secure_fs import SecureDirectory, SecureDirectoryIdentity
 from xsync_v2.state_machine import TRANSITION_TABLE, decide, reduce
 from xsync_v2.submission_store import (
@@ -398,6 +402,13 @@ class ArchitectureTest(unittest.TestCase):
             DialogueRuntime.start_host_ipc,
             DialogueRuntime.close_host_ipc,
             DialogueRuntime.close,
+            RuntimeOwnerAuthority,
+            RuntimeOwnerAuthority.runtime_epoch,
+            RuntimeOwnerAuthority.assert_valid,
+            RuntimeEpochAuthority,
+            RuntimeEpochAuthority.__call__,
+            RuntimeCliError,
+            runtime_cli_main,
             SecureDirectoryIdentity,
             SecureDirectory,
             SecureDirectory.identity,

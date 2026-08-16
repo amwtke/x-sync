@@ -50,6 +50,17 @@ class _HeldLease:
 
 
 @dataclass(frozen=True, slots=True)
+class _HeldRuntimeOwner:
+    manager_token: object
+    descriptor: int
+    directory_descriptor: int
+    lock_name: str
+    lock_identity: tuple[int, int]
+    runtime_epoch: str
+    owner_pid: int
+
+
+@dataclass(frozen=True, slots=True)
 class _PinnedLockFile:
     descriptor: int
     identity: tuple[int, int]
@@ -66,6 +77,7 @@ _AUTHORITY_KEY: Final = object()
 _THREAD_STATE = _ThreadLockState()
 _ACTIVE_GUARD = threading.Lock()
 _ACTIVE_LEASES: dict[int, _HeldLease] = {}
+_ACTIVE_RUNTIME_OWNERS: dict[int, _HeldRuntimeOwner] = {}
 
 
 def _identity_name(lock_name: str) -> str:
@@ -132,6 +144,21 @@ def _authority_is_live(lease: _HeldLease, kind: _LockKind) -> bool:
             lease.lock_name,
             lease.lock_identity,
             lease.descriptor,
+        )
+    return active
+
+
+def _runtime_owner_is_live(owner: _HeldRuntimeOwner) -> bool:
+    if type(owner) is not _HeldRuntimeOwner or owner.owner_pid != os.getpid():
+        return False
+    with _ACTIVE_GUARD:
+        active = _ACTIVE_RUNTIME_OWNERS.get(id(owner)) is owner
+    if active:
+        _assert_lock_identity_current(
+            owner.directory_descriptor,
+            owner.lock_name,
+            owner.lock_identity,
+            owner.descriptor,
         )
     return active
 
@@ -293,11 +320,47 @@ class SessionLockAuthority:
         self.assert_session(session_id)
 
 
+@dataclass(frozen=True, slots=True, init=False)
+class RuntimeOwnerAuthority:
+    """Process-wide proof that this daemon owns the runtime epoch fence."""
+
+    _owner: _HeldRuntimeOwner
+
+    def __init__(
+        self,
+        key: object = None,
+        owner: _HeldRuntimeOwner | None = None,
+    ) -> None:
+        if (
+            type(self) is not RuntimeOwnerAuthority
+            or key is not _AUTHORITY_KEY
+            or type(owner) is not _HeldRuntimeOwner
+        ):
+            raise LockError("LOCK_AUTHORITY_CONSTRUCTION_FORBIDDEN")
+        object.__setattr__(self, "_owner", owner)
+
+    @property
+    def runtime_epoch(self) -> str:
+        """Return the fenced epoch after revalidating the lifetime lock."""
+        self.assert_valid()
+        return self._owner.runtime_epoch
+
+    def assert_valid(self) -> None:
+        """Reject an expired, forged, replaced, or inherited owner proof."""
+        if type(self) is not RuntimeOwnerAuthority or not _runtime_owner_is_live(
+            self._owner
+        ):
+            raise LockError("RUNTIME_OWNER_AUTHORITY_INVALID")
+
+
 def _after_fork_child() -> None:
     try:
         for lease in tuple(_ACTIVE_LEASES.values()):
             _close_quietly(lease.descriptor)
+        for owner in tuple(_ACTIVE_RUNTIME_OWNERS.values()):
+            _close_quietly(owner.descriptor)
         _ACTIVE_LEASES.clear()
+        _ACTIVE_RUNTIME_OWNERS.clear()
         _THREAD_STATE.stack = []
     finally:
         _ACTIVE_GUARD.release()
@@ -329,6 +392,7 @@ class DomainLockManager:
         self._directory_fd = -1
         self._pin_guard = threading.Lock()
         self._pinned_lock_files: dict[str, _PinnedLockFile] = {}
+        self._runtime_owner: _HeldRuntimeOwner | None = None
         self._directory_path = self._validate_directory_path(directory)
         self._directory_fd = self._open_lock_directory(self._directory_path)
         metadata = os.fstat(self._directory_fd)
@@ -787,6 +851,74 @@ class DomainLockManager:
         self._register_lease(lease)
         return lease
 
+    def acquire_runtime_owner(
+        self,
+        runtime_epoch: object,
+        *,
+        blocking: bool = False,
+    ) -> RuntimeOwnerAuthority:
+        """Acquire the process-wide daemon lifetime fence for one epoch."""
+        try:
+            epoch = _validate_session_id(runtime_epoch)
+        except LockError as exc:
+            raise LockError("INVALID_RUNTIME_EPOCH") from exc
+        blocking = _validate_blocking(blocking)
+        self._ensure_open()
+        if self._runtime_owner is not None:
+            raise LockError("RUNTIME_OWNER_ALREADY_ACQUIRED")
+        lock_name = "runtime-owner.lock"
+        descriptor, lock_identity = self._open_lock_file(lock_name)
+        try:
+            try:
+                self._take_os_lock(descriptor, fcntl.LOCK_EX, blocking)
+            except LockError as exc:
+                if exc.code == "LOCK_BUSY":
+                    raise LockError("RUNTIME_ALREADY_RUNNING") from exc
+                raise
+            self._verify_namespace_current()
+            _assert_lock_identity_current(
+                self._directory_fd,
+                lock_name,
+                lock_identity,
+                descriptor,
+            )
+        except BaseException:
+            _close_quietly(descriptor)
+            raise
+        owner = _HeldRuntimeOwner(
+            self._manager_token,
+            descriptor,
+            self._directory_fd,
+            lock_name,
+            lock_identity,
+            epoch,
+            os.getpid(),
+        )
+        with _ACTIVE_GUARD:
+            _ACTIVE_RUNTIME_OWNERS[id(owner)] = owner
+        self._runtime_owner = owner
+        return RuntimeOwnerAuthority(_AUTHORITY_KEY, owner)
+
+    def release_runtime_owner(self, authority: RuntimeOwnerAuthority) -> None:
+        """Release this manager's live daemon lifetime fence."""
+        self._ensure_open()
+        self.assert_runtime_owner_authority(authority)
+        owner = authority._owner
+        release_error = False
+        try:
+            fcntl.flock(owner.descriptor, fcntl.LOCK_UN)
+        except OSError:
+            release_error = True
+        try:
+            os.close(owner.descriptor)
+        except OSError:
+            release_error = True
+        with _ACTIVE_GUARD:
+            _ACTIVE_RUNTIME_OWNERS.pop(id(owner), None)
+        self._runtime_owner = None
+        if release_error:
+            raise LockError("RUNTIME_OWNER_RELEASE_FAILED")
+
     @staticmethod
     def _release(lease: _HeldLease) -> None:
         stack = DomainLockManager._thread_stack()
@@ -917,6 +1049,21 @@ class DomainLockManager:
         if authority._lease.manager_token is not self._manager_token:
             raise LockError("LOCK_AUTHORITY_INVALID")
 
+    def assert_runtime_owner_authority(
+        self,
+        authority: RuntimeOwnerAuthority,
+    ) -> None:
+        """Bind a live daemon owner proof to this exact lock namespace."""
+        self._ensure_open()
+        if type(authority) is not RuntimeOwnerAuthority:
+            raise LockError("RUNTIME_OWNER_AUTHORITY_INVALID")
+        authority.assert_valid()
+        if (
+            authority._owner.manager_token is not self._manager_token
+            or authority._owner is not self._runtime_owner
+        ):
+            raise LockError("RUNTIME_OWNER_AUTHORITY_INVALID")
+
     def close(self) -> None:
         """Close the lock directory handle when this manager holds no locks."""
         if self._closed:
@@ -930,6 +1077,10 @@ class DomainLockManager:
                 for lease in _ACTIVE_LEASES.values()
             ):
                 raise LockError("DOMAIN_LOCKS_HELD")
+        if self._runtime_owner is not None:
+            self.release_runtime_owner(
+                RuntimeOwnerAuthority(_AUTHORITY_KEY, self._runtime_owner)
+            )
         close_error = False
         with self._pin_guard:
             for pinned in self._pinned_lock_files.values():
@@ -960,6 +1111,11 @@ class DomainLockManager:
         descriptor = getattr(self, "_directory_fd", -1)
         owner_pid = getattr(self, "_owner_pid", -1)
         if descriptor >= 0 and owner_pid == os.getpid():
+            runtime_owner = getattr(self, "_runtime_owner", None)
+            if type(runtime_owner) is _HeldRuntimeOwner:
+                _close_quietly(runtime_owner.descriptor)
+                with _ACTIVE_GUARD:
+                    _ACTIVE_RUNTIME_OWNERS.pop(id(runtime_owner), None)
             pinned_lock_files = getattr(self, "_pinned_lock_files", {})
             for pinned in pinned_lock_files.values():
                 _close_quietly(pinned.descriptor)

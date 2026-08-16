@@ -1,3 +1,4 @@
+# ruff: noqa: I001
 from __future__ import annotations
 
 from pathlib import Path
@@ -10,6 +11,8 @@ from xsync_v2.coordinator import DialogueSessionConfig
 from xsync_v2.domain import EvidenceCheck, EvidenceHealth, Lens
 from xsync_v2.event_codec import sha256_digest
 from xsync_v2.host_context import EvidenceContextClaim, HostContextSource
+from xsync_v2.lease_store import ClaimRequest
+from xsync_v2.locking import LockError
 from xsync_v2.observers.work_wake import WorkWakeHint
 from xsync_v2.runtime import DialogueRuntime, DialogueRuntimeError, _WakeRelay
 from xsync_v2.secure_fs import SecureFsError
@@ -114,6 +117,42 @@ class DialogueRuntimeTest(unittest.TestCase):
         self.assertIsNotNone(second.host.current("session-1"))
         events = second.public_stream.subscribe("session-1", 0).read_available()
         self.assertEqual((1,), tuple(item.sequence for item in events))
+
+    def test_default_runtime_epoch_authority_fences_parallel_daemons(self) -> None:
+        runtime = DialogueRuntime(
+            self.root,
+            "registry-1",
+            "runtime-default",
+            evidence_verifier=lambda config: EvidenceCheck(
+                EvidenceHealth.CURRENT,
+                config.evidence_digest,
+            ),
+            context_provider=RuntimeContextProvider(),
+            lease_clock=lambda: self.now,
+            browser_clock=lambda: "2026-08-16T15:00:00+08:00",
+            monotonic_clock=lambda: float(self.now),
+            durable_poll_interval=0.01,
+        )
+        self.addCleanup(runtime.close)
+        runtime.resolve(self.config)
+        current = runtime.host.current("session-1")
+        self.assertIsNotNone(current)
+        assert current is not None
+        claimed = runtime.host.claim(
+            ClaimRequest(
+                "session-1",
+                "claim-request-default",
+                "claim-default",
+                current.work_id,
+                "owner-default",
+                30,
+                120,
+            )
+        )
+        self.assertEqual("runtime-default", claimed.lease.runtime_epoch)
+
+        with self.assertRaisesRegex(LockError, "RUNTIME_ALREADY_RUNNING"):
+            self.build_runtime(self.root)
 
     def test_browser_server_uses_the_runtime_browser_and_stream(self) -> None:
         runtime = self.open_runtime()
