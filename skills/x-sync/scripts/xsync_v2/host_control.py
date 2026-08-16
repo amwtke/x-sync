@@ -26,6 +26,8 @@ from .host_work import (
     HostResultPublishRequest,
     HostWorkService,
     LeaseExhaustionRecordRequest,
+    SubmissionHandlePublishRequest,
+    SubmissionHandleRegisterRequest,
 )
 from .lease_store import (
     ClaimRequest,
@@ -42,6 +44,7 @@ from .lease_store import (
 from .locking import DomainLockManager, RegistryLockMode, SessionLockAuthority
 from .observers.work_wake import WorkWakeHint
 from .work import RunnableWork
+from .submission_store import SubmissionRegistrationOutcome
 
 
 _ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
@@ -415,3 +418,17 @@ class HostControl:
     ) -> DialogueCommitOutcome:
         """Publish the shared strict Host result through trusted derivation."""
         return self._work_service.publish_result(request)
+
+    def register_submission(
+        self,
+        request: SubmissionHandleRegisterRequest,
+    ) -> SubmissionRegistrationOutcome:
+        """Register one opaque submission handle for the current claim."""
+        return self._work_service.register_submission(request)
+
+    def submit_result(
+        self,
+        request: SubmissionHandlePublishRequest,
+    ) -> DialogueCommitOutcome:
+        """Publish a strict Host result by its opaque submission handle."""
+        return self._work_service.submit_result(request)

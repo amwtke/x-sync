@@ -14,6 +14,7 @@ from .event_codec import (
     DialogueActor,
     canonical_json_bytes,
 )
+from .event_store import DialogueCommitOutcome
 from .host_context import HostContextError, encode_host_context
 from .host_control import (
     HostClaimEnvelope,
@@ -26,6 +27,8 @@ from .host_result import HostResultError, decode_host_result
 from .host_work import (
     HostResultPublishRequest,
     HostWorkServiceError,
+    SubmissionHandlePublishRequest,
+    SubmissionHandleRegisterRequest,
 )
 from .lease_store import (
     ClaimRequest,
@@ -267,7 +270,16 @@ def _failure(operation: object, code: str) -> HostApiResponse:
     safe_operation = (
         operation
         if type(operation) is str
-        and operation in {"wait", "claim", "renew", "reclaim", "publish"}
+        and operation
+        in {
+            "wait",
+            "claim",
+            "renew",
+            "reclaim",
+            "register_submission",
+            "submit",
+            "publish",
+        }
         else "invalid"
     )
     return HostApiResponse(
@@ -305,6 +317,10 @@ class HostApi:
                 return self._renew(request)
             if operation == "reclaim":
                 return self._reclaim(request)
+            if operation == "register_submission":
+                return self._register_submission(request)
+            if operation == "submit":
+                return self._submit(request)
             if operation == "publish":
                 return self._publish(request)
             raise HostApiError("HOST_API_OPERATION_UNSUPPORTED")
@@ -519,20 +535,82 @@ class HostApi:
                 _decode_fence(request["fence"]),
             )
         )
-        receipt = outcome.receipt
+        return _success("publish", _receipt_tree(outcome))
+
+    def _register_submission(
+        self,
+        request: dict[str, object],
+    ) -> HostApiResponse:
+        _keys(
+            request,
+            frozenset({"submission_handle", "work", "fence"}),
+        )
+        outcome = self._control.register_submission(
+            SubmissionHandleRegisterRequest(
+                _identifier(request["submission_handle"]),
+                _decode_work(request["work"]),
+                _decode_fence(request["fence"]),
+            )
+        )
         return _success(
-            "publish",
+            "register_submission",
             {
-                "command_id": receipt.command_id,
-                "transaction_id": receipt.transaction_id,
-                "from_sequence": receipt.from_sequence,
-                "to_sequence": receipt.to_sequence,
-                "event_ids": list(receipt.event_ids),
-                "state_digest": receipt.state_digest,
-                "conversation_version": outcome.state.conversation_version,
+                "handle_digest": outcome.record.handle_digest,
+                "work_id": outcome.record.work.work_id,
+                "claim_id": outcome.record.fence.claim_id,
                 "replayed": outcome.replayed,
             },
         )
+
+    def _submit(self, request: dict[str, object]) -> HostApiResponse:
+        _keys(
+            request,
+            frozenset(
+                {
+                    "submission_handle",
+                    "idempotency_key",
+                    "result",
+                    "occurred_at",
+                    "actor_id",
+                }
+            ),
+        )
+        result_tree = request["result"]
+        if type(result_tree) is not dict:
+            raise HostApiError("HOST_API_SCHEMA_INVALID")
+        try:
+            result = decode_host_result(canonical_json_bytes(result_tree))
+        except (TypeError, ValueError, RecursionError) as exc:
+            raise HostApiError("HOST_API_SCHEMA_INVALID") from exc
+        outcome = self._control.submit_result(
+            SubmissionHandlePublishRequest(
+                _identifier(request["submission_handle"]),
+                _identifier(request["idempotency_key"]),
+                result,
+                cast(str, request["occurred_at"]),
+                DialogueActor(
+                    ActorKind.HOST,
+                    _identifier(request["actor_id"]),
+                ),
+            )
+        )
+        return _success("submit", _receipt_tree(outcome))
+
+
+def _receipt_tree(outcome: DialogueCommitOutcome) -> dict[str, object]:
+    receipt = outcome.receipt
+    state = outcome.state
+    replayed = outcome.replayed
+    return {
+        "command_id": receipt.command_id,
+        "transaction_id": receipt.transaction_id,
+        "from_sequence": receipt.from_sequence,
+        "to_sequence": receipt.to_sequence,
+        "event_ids": list(receipt.event_ids),
+        "state_digest": receipt.state_digest,
+        "conversation_version": state.conversation_version,
+        "replayed": replayed,
+    }
 
 
 __all__ = [

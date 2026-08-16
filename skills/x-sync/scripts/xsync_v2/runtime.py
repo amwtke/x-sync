@@ -38,6 +38,7 @@ from .observers.public_stream import PublicStreamObserver
 from .observers.work_wake import WorkWakeHint, WorkWakeObserver
 from .repository_context import RepositoryHostContextProvider
 from .secure_fs import SecureDirectory
+from .submission_store import SubmissionHandleStore
 
 
 class DialogueRuntimeError(RuntimeError):
@@ -126,6 +127,7 @@ class DialogueRuntime:
         dialogues: SecureDirectory | None = None
         locks: DomainLockManager | None = None
         evidence_store: SessionEvidenceStore | None = None
+        submission_store: SubmissionHandleStore | None = None
         try:
             root = SecureDirectory.open(path)
             dialogues = root.ensure_directory("dialogues")
@@ -176,7 +178,8 @@ class DialogueRuntime:
                 ),
                 runtime_authority_verifier=runtime_authority_verifier,
             )
-            work_service = HostWorkService(coordinator, leases)
+            submission_store = SubmissionHandleStore(dialogues, locks)
+            work_service = HostWorkService(coordinator, leases, submission_store)
             if evidence_store is not None:
                 active_context_provider: HostContextProvider = (
                     RepositoryHostContextProvider(coordinator, evidence_store)
@@ -201,6 +204,8 @@ class DialogueRuntime:
                 clock=browser_clock,
             )
         except BaseException:
+            if submission_store is not None:
+                submission_store.close()
             if evidence_store is not None:
                 evidence_store.close()
             if locks is not None:
@@ -217,6 +222,7 @@ class DialogueRuntime:
         self._coordinator = coordinator
         self._leases = leases
         self._work_service = work_service
+        self._submission_store = submission_store
         self._host_control = host_control
         self._host_api = host_api
         self._browser_commands = browser_commands
@@ -380,6 +386,7 @@ class DialogueRuntime:
                     error = exc
         if self._evidence_store is not None:
             self._evidence_store.close()
+        self._submission_store.close()
         try:
             self._locks.close()
         except BaseException as exc:

@@ -15,7 +15,7 @@ from typing import Protocol, cast
 from .event_codec import PROTOCOL_VERSION, SCHEMA_VERSION, canonical_json_bytes
 from .host_ipc import HostIpcClient, HostIpcError
 from .host_result import HostResult, HostResultError, encode_host_result
-from .work_identity import is_protocol_id
+from .work_identity import is_protocol_id, is_sha256_digest
 
 
 Emit = Callable[[bytes], None]
@@ -534,7 +534,11 @@ class HostSupervisor:
             },
         )
         if claimed.ok:
-            return self._active_claim(cast(dict[str, object], claimed.payload), attempt)
+            active = self._active_claim(
+                cast(dict[str, object], claimed.payload),
+                attempt,
+            )
+            return self._register_active(active)
         if claimed.error_code == "WORK_ALREADY_LEASED":
             self._idle_wait()
             return None
@@ -572,7 +576,7 @@ class HostSupervisor:
         payload = cast(dict[str, object], reclaimed.payload)
         disposition = payload.get("disposition")
         if disposition == "claimed":
-            return self._active_claim(payload, attempt)
+            return self._register_active(self._active_claim(payload, attempt))
         if disposition not in {"requeued", "dead_lettered"}:
             raise HostSupervisorError("HOST_SUPERVISOR_RESPONSE_INVALID")
         self._emit(
@@ -633,6 +637,30 @@ class HostSupervisor:
             dict(context),
             self._handle(),
         )
+
+    def _register_active(self, active: _ActiveClaim) -> _ActiveClaim:
+        result = self._call(
+            "register_submission",
+            {
+                "submission_handle": active.submission_handle,
+                "work": active.work,
+                "fence": active.fence,
+            },
+        )
+        if not result.ok:
+            raise _StopSupervisor(cast(str, result.error_code))
+        payload = _required_mapping(
+            result.payload,
+            frozenset({"handle_digest", "work_id", "claim_id", "replayed"}),
+        )
+        if (
+            not is_sha256_digest(payload["handle_digest"])
+            or payload["work_id"] != active.work.get("work_id")
+            or payload["claim_id"] != active.lease.get("claim_id")
+            or type(payload["replayed"]) is not bool
+        ):
+            raise HostSupervisorError("HOST_SUPERVISOR_RESPONSE_INVALID")
+        return active
 
     def _serve_active(self, active: _ActiveClaim) -> None:
         renew_at = self._now() + self._lease_seconds / 2
@@ -719,11 +747,10 @@ class HostSupervisor:
     ) -> bool:
         result_tree = json.loads(encode_host_result(submission.result))
         result = self._call(
-            "publish",
+            "submit",
             {
+                "submission_handle": active.submission_handle,
                 "idempotency_key": submission.idempotency_key,
-                "work": active.work,
-                "fence": active.fence,
                 "result": result_tree,
                 "occurred_at": submission.occurred_at,
                 "actor_id": submission.actor_id,

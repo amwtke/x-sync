@@ -1,15 +1,17 @@
+# ruff: noqa: I001
 from __future__ import annotations
 
 import json
+import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
-import unittest
 
 import tests.xsync_v2_path  # noqa: F401
+
 from xsync_v2.coordinator import DialogueSessionConfig
 from xsync_v2.domain import EvidenceCheck, EvidenceHealth, Lens
 from xsync_v2.event_codec import PROTOCOL_VERSION, SCHEMA_VERSION, sha256_digest
-from xsync_v2.host_api import HostApi, MAX_HOST_API_REQUEST_BYTES
+from xsync_v2.host_api import MAX_HOST_API_REQUEST_BYTES, HostApi
 from xsync_v2.host_context import EvidenceContextClaim, HostContextSource
 from xsync_v2.runtime import DialogueRuntime
 
@@ -46,6 +48,7 @@ class HostApiTest(unittest.TestCase):
         self.temporary = TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         root = Path(self.temporary.name).resolve()
+        self.root = root
         self.now = 1_000
         self.runtime = DialogueRuntime(
             root,
@@ -176,6 +179,109 @@ class HostApiTest(unittest.TestCase):
         self.assertFalse(renewed["payload"]["replayed"])
         self.assertEqual(2, renewed["payload"]["lease"]["lease_version"])
 
+    def test_opaque_submit_uses_latest_fence_and_replays_after_restart(self) -> None:
+        claimed = self.claim()
+        handle = "submission.secret-1"
+        registered = self.request(
+            "register_submission",
+            submission_handle=handle,
+            work=claimed["work"],
+            fence=claimed["fence"],
+        )
+        self.assertTrue(registered["ok"])
+        self.assertFalse(registered["payload"]["replayed"])
+        self.assertNotIn(handle, json.dumps(registered))
+
+        self.now += 10
+        renewed = self.request(
+            "renew",
+            session_id="session-1",
+            request_id="renew-request-opaque-1",
+            claim_id=claimed["lease"]["claim_id"],
+            work_id=claimed["lease"]["work_id"],
+            owner_id=claimed["lease"]["owner_id"],
+            expected_lease_version=1,
+            lease_seconds=30,
+        )
+        self.assertEqual(2, renewed["payload"]["lease"]["lease_version"])
+
+        submission = {
+            "submission_handle": handle,
+            "idempotency_key": "submit-candidates-1",
+            "result": {
+                "type": "topic_candidates",
+                "candidates": ["Registry fencing", "Lease recovery"],
+            },
+            "occurred_at": self.config.created_at,
+            "actor_id": "host.adapter-1",
+        }
+        first = self.request("submit", **submission)
+        self.assertTrue(first["ok"])
+        self.assertFalse(first["payload"]["replayed"])
+
+        self.runtime.close()
+        restarted = DialogueRuntime(
+            self.root,
+            "registry-1",
+            "runtime-2",
+            evidence_verifier=lambda config: EvidenceCheck(
+                EvidenceHealth.CURRENT,
+                config.evidence_digest,
+            ),
+            context_provider=ApiContextProvider(),
+            runtime_authority_verifier=lambda _check, _authority: True,
+            lease_clock=lambda: self.now + 1_000,
+            browser_clock=lambda: "2026-08-16T18:00:00+08:00",
+            monotonic_clock=lambda: float(self.now + 1_000),
+            durable_poll_interval=0.01,
+        )
+        self.addCleanup(restarted.close)
+        self.runtime = restarted
+        self.api = restarted.host_api
+        replay = self.request("submit", **submission)
+        self.assertTrue(replay["ok"])
+        self.assertTrue(replay["payload"]["replayed"])
+        self.assertEqual(
+            first["payload"]["transaction_id"],
+            replay["payload"]["transaction_id"],
+        )
+
+        submission["result"] = {
+            "type": "topic_candidates",
+            "candidates": ["Different"],
+        }
+        conflict = self.request("submit", **submission)
+        self.assertFalse(conflict["ok"])
+        self.assertEqual("IDEMPOTENCY_CONFLICT", conflict["error"]["code"])
+
+    def test_submission_registration_and_secret_mismatch_fail_closed(self) -> None:
+        claimed = self.claim()
+        wrong = self.request(
+            "register_submission",
+            submission_handle="submission.secret-1",
+            work=claimed["work"],
+            fence={**claimed["fence"], "claim_id": "claim-wrong"},
+        )
+        self.assertFalse(wrong["ok"])
+        self.assertEqual("LEASE_FENCED", wrong["error"]["code"])
+
+        missing = self.request(
+            "submit",
+            submission_handle="submission.unknown",
+            idempotency_key="submit-missing-1",
+            result={
+                "type": "topic_candidates",
+                "candidates": ["Registry fencing"],
+            },
+            occurred_at=self.config.created_at,
+            actor_id="host.adapter-1",
+        )
+        self.assertFalse(missing["ok"])
+        self.assertEqual(
+            "SUBMISSION_HANDLE_NOT_FOUND",
+            missing["error"]["code"],
+        )
+
     def test_reclaim_recovers_expired_tenures_and_advances_exhaustion(self) -> None:
         claimed = self.claim()
         lease = claimed["lease"]
@@ -223,17 +329,27 @@ class HostApiTest(unittest.TestCase):
 
     def test_malformed_requests_fail_closed_without_exception_details(self) -> None:
         requests = (
-            b'{"schema_version":2,"schema_version":2,'
-            b'"protocol_version":"x-sync-dialogue/2","operation":"wait",'
-            b'"session_id":"session-1","timeout":0}',
-            b'{"schema_version":2,"protocol_version":"x-sync-dialogue/2",'
-            b'"operation":"wait","session_id":"session-1","timeout":true}',
-            b'{"schema_version":2,"protocol_version":"x-sync-dialogue/2",'
-            b'"operation":"deploy"}',
-            b'{"schema_version":2.0,"protocol_version":"x-sync-dialogue/2",'
-            b'"operation":"wait","session_id":"session-1","timeout":0}',
-            b'{"schema_version":2,"protocol_version":"x-sync-dialogue/2",'
-            b'"operation":{}}',
+            (
+                b'{"schema_version":2,"schema_version":2,'
+                b'"protocol_version":"x-sync-dialogue/2","operation":"wait",'
+                b'"session_id":"session-1","timeout":0}'
+            ),
+            (
+                b'{"schema_version":2,"protocol_version":"x-sync-dialogue/2",'
+                b'"operation":"wait","session_id":"session-1","timeout":true}'
+            ),
+            (
+                b'{"schema_version":2,"protocol_version":"x-sync-dialogue/2",'
+                b'"operation":"deploy"}'
+            ),
+            (
+                b'{"schema_version":2.0,"protocol_version":"x-sync-dialogue/2",'
+                b'"operation":"wait","session_id":"session-1","timeout":0}'
+            ),
+            (
+                b'{"schema_version":2,"protocol_version":"x-sync-dialogue/2",'
+                b'"operation":{}}'
+            ),
             b"{" + b" " * MAX_HOST_API_REQUEST_BYTES + b"}",
         )
         for raw in requests:

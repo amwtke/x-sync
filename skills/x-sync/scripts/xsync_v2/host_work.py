@@ -77,6 +77,7 @@ from .host_result import (
 from .lease_store import (
     AuthoritativeWorkSnapshot,
     LeaseExhaustionProof,
+    LeaseRecord,
     LeaseStore,
     LeaseStoreError,
     PublishFence,
@@ -84,7 +85,7 @@ from .lease_store import (
     _exhaustion_proof_tree,
     _work_tree,
 )
-from .locking import LockError, SessionLockAuthority
+from .locking import LockError, RegistryLockMode, SessionLockAuthority
 from .registry import DialogueRegistrationStatus, RegistryState
 from .registry_store import RegistryStoreError
 from .secure_fs import SecureFsError
@@ -93,6 +94,11 @@ from .state_machine import (
     PUBLISHABLE_EVIDENCE,
     RETRYABLE_WORK_FAILURES,
     decide,
+)
+from .submission_store import (
+    SubmissionHandleStore,
+    SubmissionRegistrationOutcome,
+    SubmissionStoreError,
 )
 from .work import (
     RunnableWork,
@@ -156,6 +162,26 @@ class LeaseExhaustionRecordRequest:
     """Runtime request to canonically resolve one exhausted lease history."""
 
     proof: LeaseExhaustionProof
+    occurred_at: str
+    actor: DialogueActor
+
+
+@dataclass(frozen=True, slots=True)
+class SubmissionHandleRegisterRequest:
+    """Register one opaque handle for an already-durable current claim."""
+
+    handle: str
+    work: RunnableWork
+    fence: PublishFence
+
+
+@dataclass(frozen=True, slots=True)
+class SubmissionHandlePublishRequest:
+    """Submit a strict result without exposing an auto-renewed lease fence."""
+
+    handle: str
+    idempotency_key: str
+    result: HostResult
     occurred_at: str
     actor: DialogueActor
 
@@ -273,6 +299,18 @@ def _stable_fence_tree(fence: PublishFence) -> dict[str, object]:
     }
 
 
+def _publish_fence(lease: LeaseRecord) -> PublishFence:
+    return PublishFence(
+        lease.session_id,
+        lease.claim_id,
+        lease.work_id,
+        lease.owner_id,
+        lease.runtime_epoch,
+        lease.lease_version,
+        lease.registry_generation,
+    )
+
+
 def _request_digest(request: HostWorkPublishRequest) -> str:
     dialogue_digest = dialogue_request_digest(
         DialogueWriteRequestRecord(
@@ -363,16 +401,96 @@ class HostWorkService:
         self,
         coordinator: DialogueCoordinator,
         leases: LeaseStore,
+        submission_store: SubmissionHandleStore | None = None,
     ) -> None:
         if (
             type(coordinator) is not DialogueCoordinator
             or type(leases) is not LeaseStore
             or leases._locks is not coordinator._locks
             or leases._dialogues is not coordinator._dialogues
+            or (
+                submission_store is not None
+                and type(submission_store) is not SubmissionHandleStore
+            )
         ):
             raise HostWorkServiceError("INVALID_HOST_WORK_CONFIGURATION")
         self._coordinator = coordinator
         self._leases = leases
+        self._submission_store = submission_store
+
+    def register_submission(
+        self,
+        request: SubmissionHandleRegisterRequest,
+    ) -> SubmissionRegistrationOutcome:
+        """Bind an opaque handle to the exact current claim under domain locks."""
+        if (
+            type(request) is not SubmissionHandleRegisterRequest
+            or type(request.work) is not RunnableWork
+            or type(request.fence) is not PublishFence
+            or self._submission_store is None
+        ):
+            raise HostWorkServiceError("INVALID_SUBMISSION_REGISTRATION")
+        collector = self._coordinator._start_operation()
+        try:
+            with self._coordinator._locks.semantic_session(
+                request.work.session_id,
+                registry_mode=RegistryLockMode.EXCLUSIVE,
+            ) as authority:
+                current = self._leases.current_runnable(
+                    request.work.session_id,
+                    authority,
+                )
+                if current is None or current.work != request.work:
+                    raise HostWorkServiceError("WORK_SUPERSEDED")
+                self._leases._assert_publishable(request.fence, authority)
+                return self._submission_store.register(
+                    request.handle,
+                    request.work,
+                    request.fence,
+                    authority,
+                )
+        except HostWorkServiceError:
+            raise
+        except (LeaseStoreError, LockError, SubmissionStoreError, WorkError) as exc:
+            raise HostWorkServiceError(exc.code) from exc
+        finally:
+            self._coordinator._finish_operation(collector)
+
+    def submit_result(
+        self,
+        request: SubmissionHandlePublishRequest,
+    ) -> DialogueCommitOutcome:
+        """Publish by opaque handle with receipt lookup before every live fence."""
+        if (
+            type(request) is not SubmissionHandlePublishRequest
+            or self._submission_store is None
+        ):
+            raise HostWorkServiceError("INVALID_SUBMISSION_REQUEST")
+        try:
+            record = self._submission_store.resolve(request.handle)
+            prepared = HostResultPublishRequest(
+                request.idempotency_key,
+                record.work,
+                request.result,
+                request.occurred_at,
+                request.actor,
+                record.fence,
+            )
+            prepared, request_digest = self._validate_result_request(prepared)
+        except HostWorkServiceError:
+            raise
+        except SubmissionStoreError as exc:
+            raise HostWorkServiceError(exc.code) from exc
+        collector = self._coordinator._start_operation()
+        try:
+            return self._submit_result(
+                request.handle,
+                prepared,
+                request_digest,
+                collector,
+            )
+        finally:
+            self._coordinator._finish_operation(collector)
 
     def publish(
         self,
@@ -659,6 +777,126 @@ class HostWorkService:
             ValueError,
         ) as exc:
             code = getattr(exc, "code", "HOST_RESULT_PUBLISH_FAILED")
+            raise HostWorkServiceError(code) from exc
+
+    def _submit_result(
+        self,
+        handle: str,
+        request: HostResultPublishRequest,
+        request_digest: str,
+        collector: CommittedFactCollector,
+    ) -> DialogueCommitOutcome:
+        coordinator = self._coordinator
+        store = self._submission_store
+        if store is None:
+            raise HostWorkServiceError("INVALID_SUBMISSION_REQUEST")
+        command_id = host_command_id(request.idempotency_key)
+        try:
+            record = store.resolve(handle)
+            with coordinator._locks.registry_exclusive() as registry_authority:
+                registry_log = coordinator._open_registry(registry_authority)
+                try:
+                    registry_state = registry_log.tip().state
+                    registration = _registration(
+                        registry_state,
+                        request.work.session_id,
+                    )
+                    if (
+                        registration is None
+                        or type(registration.activated_generation) is not int
+                        or registration.activated_generation < 1
+                    ):
+                        raise HostWorkServiceError("SESSION_DEACTIVATED")
+                    with coordinator._locks.session_exclusive(
+                        request.work.session_id,
+                        registry_authority,
+                    ) as session_authority:
+                        dialogue_log = coordinator._open_existing_dialogue(
+                            request.work.session_id,
+                            registration.activated_generation,
+                            session_authority,
+                        )
+                        try:
+                            store.confirm(handle, record, session_authority)
+                            replay = self._replay_command_receipt(
+                                dialogue_log,
+                                session_authority,
+                                session_id=request.work.session_id,
+                                registry_generation=(
+                                    request.work.registry_generation
+                                ),
+                                command_id=command_id,
+                                request_digest=request_digest,
+                                occurred_at=request.occurred_at,
+                                actor=request.actor,
+                                collector=collector,
+                            )
+                            if replay is not None:
+                                return replay
+                            lease = self._leases.read(
+                                request.work.session_id,
+                                session_authority,
+                            )
+                            if (
+                                lease is None
+                                or lease.session_id != record.fence.session_id
+                                or lease.work_id != record.fence.work_id
+                                or lease.binding_digest
+                                != record.work.binding_digest
+                                or lease.claim_id != record.fence.claim_id
+                                or lease.owner_id != record.fence.owner_id
+                                or lease.runtime_epoch
+                                != record.fence.runtime_epoch
+                                or lease.registry_generation
+                                != record.fence.registry_generation
+                            ):
+                                raise HostWorkServiceError("LEASE_FENCED")
+                            current_request = replace(
+                                request,
+                                fence=_publish_fence(lease),
+                            )
+                            current_request, current_digest = (
+                                self._validate_result_request(current_request)
+                            )
+                            if current_digest != request_digest:
+                                raise HostWorkServiceError(
+                                    "SUBMISSION_REQUEST_CONFLICT"
+                                )
+                            prepared = self._prepare_result_request(
+                                dialogue_log,
+                                registry_state,
+                                registration.config_digest,
+                                current_request,
+                                request_digest,
+                            )
+                            return self._publish_new(
+                                dialogue_log,
+                                session_authority,
+                                registry_state,
+                                registration.config_digest,
+                                prepared,
+                                request_digest,
+                                collector,
+                            )
+                        finally:
+                            dialogue_log.close()
+                finally:
+                    registry_log.close()
+        except HostWorkServiceError:
+            raise
+        except (
+            CoordinatorError,
+            DialogueStoreError,
+            HostResultError,
+            LeaseStoreError,
+            RegistryStoreError,
+            SecureFsError,
+            SubmissionStoreError,
+            LockError,
+            WorkError,
+            ValueError,
+        ) as exc:
+            code = getattr(exc, "code", "SUBMISSION_PUBLISH_FAILED")
             raise HostWorkServiceError(code) from exc
 
     def _prepare_result_request(

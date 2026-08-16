@@ -107,6 +107,14 @@ def _parser() -> _ArgumentParser:
     publish.add_argument("--file", dest="result_file", required=True)
     publish.add_argument("--occurred-at", required=True)
     publish.add_argument("--actor-id", required=True)
+
+    submit = commands.add_parser("submit")
+    _common(submit)
+    submit.add_argument("--supervisor", dest="submission_handle", required=True)
+    submit.add_argument("--idempotency-key", required=True)
+    submit.add_argument("--file", dest="result_file", required=True)
+    submit.add_argument("--occurred-at", required=True)
+    submit.add_argument("--actor-id", required=True)
     return parser
 
 
@@ -271,6 +279,15 @@ def _request(arguments: argparse.Namespace) -> bytes:
             idempotency_key=arguments.idempotency_key,
             work=work,
             fence=fence,
+            result=result,
+            occurred_at=arguments.occurred_at,
+            actor_id=arguments.actor_id,
+        )
+    elif operation == "submit":
+        result = _load_object(_read_file(arguments.result_file))
+        request.update(
+            submission_handle=arguments.submission_handle,
+            idempotency_key=arguments.idempotency_key,
             result=result,
             occurred_at=arguments.occurred_at,
             actor_id=arguments.actor_id,

@@ -1,14 +1,15 @@
+# ruff: noqa: I001
 from __future__ import annotations
 
 import argparse
-from io import BytesIO, StringIO
 import json
 import os
-from pathlib import Path
 import subprocess
 import sys
-from tempfile import TemporaryDirectory
 import unittest
+from io import BytesIO, StringIO
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest import mock
 
 import tests.xsync_v2_path  # noqa: F401
@@ -238,6 +239,60 @@ class HostCliTest(unittest.TestCase):
         self.assertEqual("claimed", reclaimed[2]["payload"]["disposition"])
         self.assertEqual(1, len(reclaimed[1]))
         self.assertEqual("", reclaimed[3])
+
+    def test_submit_uses_only_the_opaque_supervisor_handle(self) -> None:
+        claimed = self.claim()
+        payload = claimed[2]["payload"]
+        handle = "submission.secret-cli-1"
+        registration = self.runtime.host_api.handle(
+            json.dumps(
+                {
+                    "schema_version": SCHEMA_VERSION,
+                    "protocol_version": PROTOCOL_VERSION,
+                    "operation": "register_submission",
+                    "submission_handle": handle,
+                    "work": payload["work"],
+                    "fence": payload["fence"],
+                },
+                separators=(",", ":"),
+            ).encode()
+        )
+        self.assertTrue(json.loads(registration.body)["ok"])
+
+        result_file = self.root / "opaque-result.json"
+        result_file.write_text(
+            json.dumps(
+                {
+                    "type": "topic_candidates",
+                    "candidates": ["Registry fencing", "Lease recovery"],
+                }
+            ),
+            encoding="utf-8",
+        )
+        submitted = self.run_cli(
+            "submit",
+            "--socket",
+            str(self.socket_path),
+            "--supervisor",
+            handle,
+            "--idempotency-key",
+            "submit-cli-1",
+            "--file",
+            str(result_file),
+            "--occurred-at",
+            self.config.created_at,
+            "--actor-id",
+            "host.adapter-1",
+            "--json",
+        )
+
+        self.assertEqual(0, submitted[0])
+        self.assertEqual(1, len(submitted[1]))
+        self.assertNotIn("fence", json.dumps(submitted[2]))
+        self.assertEqual(
+            "choosing_topic",
+            self.runtime.browser.current("session-1").dialogue_state.phase.value,
+        )
 
     def test_api_failure_is_stdout_json_and_transport_failure_is_stderr(self) -> None:
         failed = self.run_cli(
