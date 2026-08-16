@@ -11,7 +11,9 @@ from xsync_v2.browser_http import (
     BrowserApi,
     BrowserHttpRequest,
     BrowserHttpResponse,
+    BrowserSseStream,
 )
+from xsync_v2.browser_server import BrowserServerAddress, LoopbackBrowserServer
 from xsync_v2.browser_service import (
     BrowserCommandRequest,
     BrowserCommandService,
@@ -135,6 +137,7 @@ class ArchitectureTest(unittest.TestCase):
     def test_browser_http_is_only_an_authenticated_dto_adapter(self):
         http_path = PACKAGE / "browser_http.py"
         service_path = PACKAGE / "browser_service.py"
+        server_path = PACKAGE / "browser_server.py"
         http_text = http_path.read_text(encoding="utf-8")
         service_text = service_path.read_text(encoding="utf-8")
         self.assertNotIn("state_machine", http_text)
@@ -143,6 +146,8 @@ class ArchitectureTest(unittest.TestCase):
         self.assertNotIn("reduce(", http_text)
         self.assertNotIn("decide(", service_text)
         self.assertNotIn("reduce(", service_text)
+        self.assertNotIn("state_machine", server_path.read_text(encoding="utf-8"))
+        self.assertNotIn("coordinator", imports(server_path))
 
     def test_transition_table_is_closed_and_exhaustive(self):
         self.assertEqual(
@@ -228,13 +233,25 @@ class ArchitectureTest(unittest.TestCase):
             BrowserHttpRequest,
             BrowserHttpResponse,
             BrowserHttpResponse.header,
+            BrowserSseStream,
+            BrowserSseStream.read,
+            BrowserSseStream.close,
             BrowserApi,
             BrowserApi.handle,
+            BrowserApi.open_stream,
+            BrowserApi.error_response,
+            BrowserServerAddress,
+            BrowserServerAddress.authority,
+            BrowserServerAddress.origin,
+            LoopbackBrowserServer,
+            LoopbackBrowserServer.start,
+            LoopbackBrowserServer.close,
             PublicStreamObserver,
             PublicStreamObserver.subscribe,
             PublicStreamObserver.on_batch,
             PublicStreamSubscription,
             PublicStreamSubscription.read_available,
+            PublicStreamSubscription.wait_available,
             PublicStreamSubscription.close,
             WorkWakeObserver,
             WorkWakeObserver.on_batch,

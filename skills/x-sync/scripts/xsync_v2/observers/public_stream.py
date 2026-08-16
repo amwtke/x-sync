@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass
+import math
 import threading
 
 from ..observer import CommittedBatch, CommittedEventView, StreamKind
@@ -137,6 +138,10 @@ class PublicStreamSubscription:
             max_events,
         )
 
+    def wait_available(self, timeout: float | int) -> bool:
+        """Wait locally for queued events; timeout never triggers a model call."""
+        return self._observer._wait_available(self._subscriber_id, timeout)
+
     def close(self) -> None:
         """Idempotently release this transient subscription."""
         self._observer._close_subscription(self._subscriber_id)
@@ -164,6 +169,7 @@ class PublicStreamObserver:
         self._subscribers: dict[int, _SubscriberState] = {}
         self._next_subscriber_id = 1
         self._lock = threading.RLock()
+        self._condition = threading.Condition(self._lock)
 
     def subscribe(
         self,
@@ -234,6 +240,7 @@ class PublicStreamObserver:
                     subscriber.pending.extend(new_events)
             stream.retained.extend(new_events)
             stream.through_sequence = new_events[-1].sequence
+            self._condition.notify_all()
 
     def _read_available(
         self,
@@ -260,6 +267,41 @@ class PublicStreamObserver:
                 subscriber.cursor = items[-1].sequence
             return items
 
+    def _wait_available(
+        self,
+        subscriber_id: int,
+        timeout: float | int,
+    ) -> bool:
+        if type(timeout) not in {int, float}:
+            raise ValueError("INVALID_STREAM_TIMEOUT")
+        try:
+            duration = float(timeout)
+        except (OverflowError, ValueError) as exc:
+            raise ValueError("INVALID_STREAM_TIMEOUT") from exc
+        if not math.isfinite(duration) or duration < 0:
+            raise ValueError("INVALID_STREAM_TIMEOUT")
+        with self._condition:
+            subscriber = self._subscribers.get(subscriber_id)
+            if subscriber is None:
+                raise PublicStreamError("SUBSCRIPTION_CLOSED")
+            if subscriber.terminal_code is not None:
+                raise PublicStreamError(subscriber.terminal_code)
+            if subscriber.pending:
+                return True
+            self._condition.wait_for(
+                lambda: (
+                    subscriber_id not in self._subscribers
+                    or subscriber.terminal_code is not None
+                    or bool(subscriber.pending)
+                ),
+                duration,
+            )
+            if subscriber_id not in self._subscribers:
+                raise PublicStreamError("SUBSCRIPTION_CLOSED")
+            if subscriber.terminal_code is not None:
+                raise PublicStreamError(subscriber.terminal_code)
+            return bool(subscriber.pending)
+
     def _subscription_cursor(self, subscriber_id: int) -> int:
         with self._lock:
             subscriber = self._subscribers.get(subscriber_id)
@@ -276,8 +318,9 @@ class PublicStreamObserver:
             )
 
     def _close_subscription(self, subscriber_id: int) -> None:
-        with self._lock:
+        with self._condition:
             self._subscribers.pop(subscriber_id, None)
+            self._condition.notify_all()
 
 
 def _valid_limit(value: object) -> bool:

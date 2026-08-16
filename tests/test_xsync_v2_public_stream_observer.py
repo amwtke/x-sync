@@ -2,6 +2,7 @@
 
 import unittest
 from dataclasses import FrozenInstanceError
+import threading
 
 import tests.xsync_v2_path  # noqa: F401
 
@@ -321,6 +322,44 @@ class PublicStreamObserverTest(unittest.TestCase):
         self.assertEqual(1, len(subscription.read_available(max_events=1)))
         self.assertEqual(1, subscription.cursor)
         subscription.close()
+
+    def test_wait_available_blocks_without_polling_and_wakes_on_commit(self) -> None:
+        observer = PublicStreamObserver()
+        subscription = observer.subscribe("session-1", after_sequence=0)
+        entered = threading.Event()
+        finished = threading.Event()
+        outcomes: list[bool] = []
+
+        def waiter() -> None:
+            entered.set()
+            outcomes.append(subscription.wait_available(timeout=5.0))
+            finished.set()
+
+        thread = threading.Thread(target=waiter)
+        thread.start()
+        self.assertTrue(entered.wait(1.0))
+        observer.on_batch(batch(event("event-1", 1)))
+        self.assertTrue(finished.wait(1.0))
+        thread.join(1.0)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual([True], outcomes)
+        self.assertEqual(
+            (1,),
+            tuple(item.sequence for item in subscription.read_available()),
+        )
+
+    def test_wait_timeout_validation_and_close_are_explicit(self) -> None:
+        observer = PublicStreamObserver()
+        subscription = observer.subscribe("session-1", after_sequence=0)
+        self.assertFalse(subscription.wait_available(timeout=0))
+        for timeout in (-1, True, "1", float("inf"), float("nan")):
+            with self.subTest(timeout=timeout):
+                with self.assertRaisesRegex(ValueError, "INVALID_STREAM_TIMEOUT"):
+                    subscription.wait_available(timeout=timeout)
+        subscription.close()
+        with self.assertRaises(PublicStreamError) as caught:
+            subscription.wait_available(timeout=0)
+        self.assertEqual("SUBSCRIPTION_CLOSED", caught.exception.code)
         with self.assertRaises(PublicStreamError) as caught:
             subscription.read_available()
         self.assertEqual("SUBSCRIPTION_CLOSED", caught.exception.code)

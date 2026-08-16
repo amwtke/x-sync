@@ -32,10 +32,11 @@ from .observers.public_stream import (
     PublicStreamError,
     PublicStreamEvent,
     PublicStreamObserver,
+    PublicStreamSubscription,
 )
 
 
-_MAX_HTTP_BODY = 128 * 1024
+MAX_HTTP_BODY_BYTES = 128 * 1024
 _IF_MATCH = re.compile(r'"conversation-v(0|[1-9][0-9]*)"\Z')
 _HEADER_NAME = re.compile(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+\Z")
 _COMMON_HEADERS = (
@@ -284,6 +285,39 @@ def _sse_event(event: PublicStreamEvent) -> bytes:
     ).encode()
 
 
+class BrowserSseStream:
+    """Authenticated live SSE handle backed by one bounded subscription."""
+
+    __slots__ = ("_subscription",)
+
+    def __init__(self, subscription: PublicStreamSubscription) -> None:
+        if type(subscription) is not PublicStreamSubscription:
+            raise ValueError("INVALID_BROWSER_SSE_STREAM")
+        self._subscription = subscription
+
+    @property
+    def cursor(self) -> int:
+        """Return the last event sequence drained by this connection."""
+        return self._subscription.cursor
+
+    def read(
+        self,
+        *,
+        timeout: float | int,
+        max_events: int = 64,
+    ) -> bytes:
+        """Wait for safe events and return one SSE frame block or keepalive."""
+        available = self._subscription.wait_available(timeout)
+        if not available:
+            return b": keepalive\n\n"
+        events = self._subscription.read_available(max_events=max_events)
+        return b"".join(_sse_event(event) for event in events)
+
+    def close(self) -> None:
+        """Idempotently release the transient browser subscription."""
+        self._subscription.close()
+
+
 class BrowserApi:
     """Authenticate and map Browser HTTP records without owning domain state."""
 
@@ -329,7 +363,7 @@ class BrowserApi:
                 raise BrowserApiError("VALIDATION_FAILED")
             headers = _headers(request)
             self._authenticate(request.method, headers)
-            if len(request.body) > _MAX_HTTP_BODY:
+            if len(request.body) > MAX_HTTP_BODY_BYTES:
                 raise BrowserApiError("PAYLOAD_TOO_LARGE")
             parsed = urlsplit(request.target)
             if parsed.scheme or parsed.netloc or parsed.fragment:
@@ -357,6 +391,32 @@ class BrowserApi:
         except Exception:
             return _error("INTERNAL_ERROR")
 
+    def open_stream(self, request: BrowserHttpRequest) -> BrowserSseStream:
+        """Authenticate and open a live stream without consuming its cursor."""
+        if type(request) is not BrowserHttpRequest or request.method != "GET":
+            raise BrowserApiError("VALIDATION_FAILED")
+        headers = _headers(request)
+        self._authenticate(request.method, headers)
+        if request.body:
+            raise BrowserApiError("VALIDATION_FAILED")
+        parsed = urlsplit(request.target)
+        if (
+            parsed.scheme
+            or parsed.netloc
+            or parsed.fragment
+            or parsed.path != "/api/v2/stream"
+        ):
+            raise BrowserApiError("VALIDATION_FAILED")
+        cursor = self._stream_cursor(parsed.query)
+        return BrowserSseStream(
+            self._stream.subscribe(self._session_id, cursor)
+        )
+
+    @staticmethod
+    def error_response(code: str) -> BrowserHttpResponse:
+        """Map one stable adapter/runtime code without exposing exception text."""
+        return _error(code)
+
     def _authenticate(self, method: str, headers: dict[str, str]) -> None:
         authorization = headers.get("authorization", "")
         if not hmac.compare_digest(authorization, self._authorization):
@@ -383,24 +443,7 @@ class BrowserApi:
         )
 
     def _stream_response(self, query: str) -> BrowserHttpResponse:
-        try:
-            parameters = parse_qs(
-                query,
-                keep_blank_values=True,
-                strict_parsing=True,
-            )
-        except ValueError as exc:
-            raise BrowserApiError("VALIDATION_FAILED") from exc
-        if set(parameters) != {"after"} or len(parameters["after"]) != 1:
-            raise BrowserApiError("VALIDATION_FAILED")
-        raw_cursor = parameters["after"][0]
-        if (
-            not raw_cursor.isascii()
-            or not raw_cursor.isdigit()
-            or len(raw_cursor) > 20
-        ):
-            raise BrowserApiError("VALIDATION_FAILED")
-        cursor = int(raw_cursor)
+        cursor = self._stream_cursor(query)
         subscription = self._stream.subscribe(self._session_id, cursor)
         try:
             events = subscription.read_available()
@@ -419,6 +462,27 @@ class BrowserApi:
             ),
             body,
         )
+
+    @staticmethod
+    def _stream_cursor(query: str) -> int:
+        try:
+            parameters = parse_qs(
+                query,
+                keep_blank_values=True,
+                strict_parsing=True,
+            )
+        except ValueError as exc:
+            raise BrowserApiError("VALIDATION_FAILED") from exc
+        if set(parameters) != {"after"} or len(parameters["after"]) != 1:
+            raise BrowserApiError("VALIDATION_FAILED")
+        raw_cursor = parameters["after"][0]
+        if (
+            not raw_cursor.isascii()
+            or not raw_cursor.isdigit()
+            or len(raw_cursor) > 20
+        ):
+            raise BrowserApiError("VALIDATION_FAILED")
+        return int(raw_cursor)
 
     def _mutation(
         self,
@@ -496,8 +560,10 @@ class BrowserApi:
 
 
 __all__ = [
+    "MAX_HTTP_BODY_BYTES",
     "BrowserApi",
     "BrowserApiError",
     "BrowserHttpRequest",
     "BrowserHttpResponse",
+    "BrowserSseStream",
 ]

@@ -7,7 +7,11 @@ import unittest
 
 import tests.xsync_v2_path  # noqa: F401
 
-from xsync_v2.browser_http import BrowserApi, BrowserHttpRequest
+from xsync_v2.browser_http import (
+    BrowserApi,
+    BrowserApiError,
+    BrowserHttpRequest,
+)
 from xsync_v2.browser_service import (
     BrowserCommandRequest,
     BrowserCommandService,
@@ -49,7 +53,10 @@ from xsync_v2.observer import (
     ImmutablePayloadView,
     StreamKind,
 )
-from xsync_v2.observers.public_stream import PublicStreamObserver
+from xsync_v2.observers.public_stream import (
+    PublicStreamError,
+    PublicStreamObserver,
+)
 
 
 def digest(label: str) -> str:
@@ -367,6 +374,49 @@ class BrowserHttpTest(unittest.TestCase):
         )
         self.assertEqual(409, ahead.status)
         self.assertEqual("CURSOR_AHEAD", json.loads(ahead.body)["error"]["code"])
+
+    def test_live_stream_waits_for_after_commit_and_closes_cleanly(self) -> None:
+        live = self.api.open_stream(
+            request("GET", "/api/v2/stream?after=0")
+        )
+        self.assertEqual(b": keepalive\n\n", live.read(timeout=0))
+        self.stream.on_batch(
+            CommittedBatch(
+                StreamKind.DIALOGUE,
+                "session-1",
+                (
+                    CommittedEventView(
+                        "event-live",
+                        1,
+                        ImmutablePayloadView(
+                            "learner_turn_submitted",
+                            (
+                                ("question_id", "question-1"),
+                                ("learner_turn_id", "turn-1"),
+                                ("text", "由 outbox 重试。"),
+                            ),
+                        ),
+                    ),
+                ),
+            )
+        )
+        chunk = live.read(timeout=0)
+        self.assertIn(b"id: 1", chunk)
+        self.assertIn("由 outbox 重试。".encode(), chunk)
+        self.assertEqual(1, live.cursor)
+        live.close()
+        with self.assertRaisesRegex(PublicStreamError, "SUBSCRIPTION_CLOSED"):
+            live.read(timeout=0)
+
+        with self.assertRaisesRegex(BrowserApiError, "AUTH_REQUIRED"):
+            self.api.open_stream(
+                BrowserHttpRequest(
+                    "GET",
+                    "/api/v2/stream?after=0",
+                    (("Host", "127.0.0.1:43123"),),
+                    b"",
+                )
+            )
 
     def test_security_and_protocol_fail_closed(self) -> None:
         checks = (
