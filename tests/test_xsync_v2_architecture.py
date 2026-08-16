@@ -50,6 +50,7 @@ from xsync_v2.evidence import (
     encode_evidence_snapshot,
 )
 from xsync_v2.host_api import HostApi, HostApiError, HostApiResponse
+from xsync_v2.host_cli import HostCliError, main as host_cli_main
 from xsync_v2.host_context import (
     EvidenceContextClaim,
     HostContextCapsule,
@@ -174,6 +175,10 @@ class ArchitectureTest(unittest.TestCase):
         ipc_text = ipc_path.read_text(encoding="utf-8")
         self.assertNotIn("state_machine", ipc_text)
         self.assertNotIn("coordinator", imports(ipc_path))
+        cli_path = PACKAGE / "host_cli.py"
+        cli_text = cli_path.read_text(encoding="utf-8")
+        self.assertNotIn("state_machine", cli_text)
+        self.assertNotIn("coordinator", imports(cli_path))
 
     def test_browser_http_is_only_an_authenticated_dto_adapter(self):
         http_path = PACKAGE / "browser_http.py"
@@ -269,6 +274,8 @@ class ArchitectureTest(unittest.TestCase):
             HostApiResponse,
             HostApi,
             HostApi.handle,
+            HostCliError,
+            host_cli_main,
             HostIpcError,
             HostIpcServer,
             HostIpcServer.path,
