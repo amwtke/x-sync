@@ -24,6 +24,7 @@ from .coordinator import (
 from .dispatch import AfterCommitDispatcher, AfterCommitReport
 from .evidence import SessionEvidenceStore
 from .host_control import HostContextProvider, HostControl, MonotonicClock
+from .host_api import HostApi
 from .host_work import HostWorkService, authoritative_work_snapshot
 from .lease_store import (
     Clock as LeaseClock,
@@ -191,6 +192,7 @@ class DialogueRuntime:
                 monotonic_clock=monotonic_clock,
                 durable_poll_interval=durable_poll_interval,
             )
+            host_api = HostApi(host_control)
             wake_relay.bind(host_control)
             browser_commands = BrowserCommandService(
                 coordinator,
@@ -215,6 +217,7 @@ class DialogueRuntime:
         self._leases = leases
         self._work_service = work_service
         self._host_control = host_control
+        self._host_api = host_api
         self._browser_commands = browser_commands
         self._public_stream = public_stream
         self._dispatcher = dispatcher
@@ -233,6 +236,12 @@ class DialogueRuntime:
         """Return the sole Host-neutral wait/claim/publish control plane."""
         self._require_open()
         return self._host_control
+
+    @property
+    def host_api(self) -> HostApi:
+        """Return the sole strict JSON adapter over the Host control plane."""
+        self._require_open()
+        return self._host_api
 
     @property
     def browser(self) -> BrowserCommandService:

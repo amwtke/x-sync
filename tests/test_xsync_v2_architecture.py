@@ -56,6 +56,7 @@ from xsync_v2.host_context import (
     build_host_context,
     encode_host_context,
 )
+from xsync_v2.host_api import HostApi, HostApiError, HostApiResponse
 from xsync_v2.host_control import (
     HostClaimEnvelope,
     HostControl,
@@ -164,6 +165,10 @@ class ArchitectureTest(unittest.TestCase):
             self.assertFalse(forbidden_imports & imports(path), path.name)
             self.assertNotIn("decide(", text, path.name)
             self.assertNotIn("reduce(", text, path.name)
+        api_path = PACKAGE / "host_api.py"
+        api_text = api_path.read_text(encoding="utf-8")
+        self.assertNotIn("state_machine", api_text)
+        self.assertNotIn("coordinator", imports(api_path))
 
     def test_browser_http_is_only_an_authenticated_dto_adapter(self):
         http_path = PACKAGE / "browser_http.py"
@@ -255,6 +260,10 @@ class ArchitectureTest(unittest.TestCase):
             HostControl.renew,
             HostControl.reclaim,
             HostControl.publish_result,
+            HostApiError,
+            HostApiResponse,
+            HostApi,
+            HostApi.handle,
             HostResultError,
             HostResultKind,
             TopicCandidatesResult,
@@ -319,6 +328,7 @@ class ArchitectureTest(unittest.TestCase):
             DialogueRuntimeError,
             DialogueRuntime,
             DialogueRuntime.host,
+            DialogueRuntime.host_api,
             DialogueRuntime.browser,
             DialogueRuntime.public_stream,
             DialogueRuntime.evidence,
