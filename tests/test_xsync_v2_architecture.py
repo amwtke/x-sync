@@ -138,7 +138,7 @@ ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = ROOT / "skills" / "x-sync" / "scripts" / "xsync_v2"
 V1_RUNTIME = ROOT / "skills" / "x-sync" / "scripts" / "xsync.py"
 V1_RUNTIME_SHA256 = (
-    "9fa72d3b3c9a9fd8ebf03c9653d70d5c78a518e3cc74edf07a07eac0dd6baf5b"
+    "efcbd216d7efd5cb09da25037f4d4eb64381f92e28205f496841587945aef2ef"
 )
 
 

@@ -4572,8 +4572,30 @@ def parser() -> argparse.ArgumentParser:
     return root
 
 
+def dialogue_main(argv: list[str]) -> int:
+    """Route explicit v2 commands without duplicating Host or Runtime parsing."""
+    if not argv or argv[0] in {"-h", "--help"}:
+        print("usage: xsync dialogue {runtime,host} ...")
+        return 0
+    adapter = argv[0]
+    forwarded = argv[1:]
+    if adapter == "runtime":
+        from xsync_v2.runtime_cli import main as runtime_main
+
+        return runtime_main(forwarded)
+    if adapter == "host":
+        from xsync_v2.host_cli import main as host_main
+
+        return host_main(forwarded)
+    print(f"x-sync: unknown dialogue command: {adapter}", file=sys.stderr)
+    return 2
+
+
 def main(argv: list[str] | None = None) -> int:
-    args = parser().parse_args(argv)
+    arguments = sys.argv[1:] if argv is None else argv
+    if arguments and arguments[0] == "dialogue":
+        return dialogue_main(arguments[1:])
+    args = parser().parse_args(arguments)
     try:
         if args.command == "bank" and args.bank_command == "validate":
             repo = find_repo(args.repo)
