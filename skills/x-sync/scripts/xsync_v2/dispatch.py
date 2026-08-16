@@ -17,6 +17,7 @@ from .domain import (
     TopicPaused,
     TopicResumed,
     TopicSelectionSubmitted,
+    TopicSwitchRequested,
     TopicStarted,
     WorkDeadLettered,
     WorkFailed,
@@ -221,6 +222,11 @@ def _dialogue_payload_view(event: CommittedDialogueEvent) -> ImmutablePayloadVie
                 ("topic_run_id", payload.topic_run_id),
                 ("cause", payload.cause.value),
             ),
+        )
+    if type(payload) is TopicSwitchRequested:
+        return ImmutablePayloadView(
+            "topic_switch_requested",
+            _fields(("topic_run_id", payload.topic_run_id)),
         )
     if type(payload) is SessionDeactivationPrepared:
         return ImmutablePayloadView(

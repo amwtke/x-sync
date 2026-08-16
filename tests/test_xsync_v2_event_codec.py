@@ -32,6 +32,7 @@ from xsync_v2.domain import (
     StartSession,
     StartTopic,
     SubmitLearnerTurn,
+    SwitchTopic,
     TaskScope,
     TopicContract,
     TriggerBinding,
@@ -336,6 +337,35 @@ class EventCodecTest(unittest.TestCase):
             self.assertEqual(record, decode_stored_event(encoded))
             self.assertEqual(encoded, encode_stored_event(decode_stored_event(encoded)))
             previous = record.event_hash
+
+    def test_topic_switch_event_round_trips_with_candidate_trigger(self):
+        state = initial_dialogue_state("dialogue-1", 1)
+        state, _ = advance(
+            state,
+            StartSession("command-start"),
+            context(TriggerKind.TOPIC_CANDIDATES),
+        )
+        state, _ = advance(
+            state,
+            PresentCandidates("command-candidates", ("支付一致性",)),
+            context(TriggerKind.TOPIC_CANDIDATES),
+        )
+        state, _ = advance(
+            state,
+            StartTopic("command-topic", contract()),
+            context(TriggerKind.INITIAL_TURN),
+        )
+        _state, event = advance(
+            state,
+            SwitchTopic("command-switch"),
+            context(TriggerKind.TOPIC_CANDIDATES, "work-switch"),
+        )
+
+        record = stored(event)
+        encoded = encode_stored_event(record)
+
+        self.assertEqual("topic_switch_requested", record.event_type)
+        self.assertEqual(record, decode_stored_event(encoded))
 
     def test_work_failure_and_recovery_union_round_trips_exactly(self):
         state, _started, retry_events = failure_retry_sequence()

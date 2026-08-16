@@ -50,6 +50,7 @@ from .domain import (
     StartSession,
     StartTopic,
     SubmitLearnerTurn,
+    SwitchTopic,
     TaskScope,
     TopicLifecycle,
     TopicContract,
@@ -57,6 +58,7 @@ from .domain import (
     TopicResumed,
     TopicRunState,
     TopicSelectionSubmitted,
+    TopicSwitchRequested,
     TopicStarted,
     TriggerBinding,
     TriggerKind,
@@ -933,6 +935,28 @@ def _pause_topic(
     return _accept(command.command_id, TopicPaused(state.active_topic.topic_run_id))
 
 
+def _switch_topic(
+    state: DialogueState, command: DialogueCommand, context: DecisionContext
+) -> Decision:
+    if type(command) is not SwitchTopic:
+        return Rejected("TOPIC_STATE_CONFLICT")
+    topic = state.active_topic
+    if topic is None:
+        return Rejected("TOPIC_STATE_CONFLICT")
+    trigger = _matching_trigger(
+        context.trigger,
+        TriggerKind.TOPIC_CANDIDATES,
+        None,
+        context.evidence.evidence_digest,
+    )
+    if trigger is None:
+        return Rejected("VALIDATION_FAILED")
+    return _accept(
+        command.command_id,
+        TopicSwitchRequested(topic.topic_run_id, trigger),
+    )
+
+
 def _resume_topic(
     state: DialogueState, command: DialogueCommand, context: DecisionContext
 ) -> Decision:
@@ -1215,6 +1239,7 @@ TRANSITION_TABLE: dict[type, Handler] = {
     CommitAgentTurn: _commit_agent_turn,
     SubmitLearnerTurn: _submit_turn,
     PauseTopic: _pause_topic,
+    SwitchTopic: _switch_topic,
     ResumeTopic: _resume_topic,
     ReportWorkFailure: _report_work_failure,
     RecoverWork: _recover_work,
@@ -1500,6 +1525,7 @@ EVENT_PAYLOAD_TYPES = frozenset(
         AgentTurnCommitted,
         LearnerTurnSubmitted,
         TopicPaused,
+        TopicSwitchRequested,
         SessionDeactivationPrepared,
         TopicResumed,
         WorkFailed,
@@ -1560,6 +1586,10 @@ def _valid_event_payload_shape(payload: object) -> bool:
             _valid_text(payload.handoff_id)
             and _valid_positive_int(payload.fence_generation)
         )
+    if type(payload) is TopicSwitchRequested:
+        return _valid_text(
+            payload.topic_run_id
+        ) and is_canonical_trigger_binding(payload.candidate_trigger)
     if type(payload) is SessionDeactivationPrepared:
         return (
             _valid_text(payload.handoff_id)
@@ -1896,6 +1926,42 @@ def reduce(
             active_topic=None,
             paused_topics=(*next_state.paused_topics, paused),
             phase=ConversationPhase.NONE,
+        )
+    elif type(payload) is TopicSwitchRequested:
+        _require(
+            state.active_topic is not None
+            and state.active_topic.topic_run_id == payload.topic_run_id
+            and _valid_trigger(
+                payload.candidate_trigger,
+                TriggerKind.TOPIC_CANDIDATES,
+                None,
+                payload.candidate_trigger.evidence_digest,
+            )
+        )
+        topic = cast(TopicRunState, state.active_topic)
+        paused_work = topic.work
+        if paused_work is not None and paused_work.status in {
+            WorkStatus.QUEUED,
+            WorkStatus.FAILED,
+        }:
+            paused_work = replace(paused_work, status=WorkStatus.SUPERSEDED)
+        paused = replace(
+            topic,
+            lifecycle=TopicLifecycle.PAUSED,
+            work=paused_work,
+        )
+        next_state = replace(
+            next_state,
+            active_topic=None,
+            paused_topics=(*state.paused_topics, paused),
+            candidates=(),
+            selected_candidate=None,
+            session_work=_queued_work_from_event(
+                state.session_id,
+                event,
+                payload.candidate_trigger,
+            ),
+            phase=ConversationPhase.WAITING_HOST,
         )
     elif type(payload) is SessionDeactivationPrepared:
         valid_new_source = (

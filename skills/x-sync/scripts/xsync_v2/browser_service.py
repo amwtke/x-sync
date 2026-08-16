@@ -32,6 +32,7 @@ from .domain import (
     ResumeTopic,
     SelectTopic,
     SubmitLearnerTurn,
+    SwitchTopic,
     TriggerBinding,
     TriggerKind,
     WorkRecoveryAction,
@@ -89,6 +90,11 @@ class PauseTopicIntent:
 
 
 @dataclass(frozen=True, slots=True)
+class SwitchTopicIntent:
+    """Learner request to pause the active Topic and choose another."""
+
+
+@dataclass(frozen=True, slots=True)
 class ResumeTopicIntent:
     """Learner request to resume one paused Topic Run."""
 
@@ -107,6 +113,7 @@ BrowserIntent: TypeAlias = (
     SubmitTurnIntent
     | SelectTopicIntent
     | PauseTopicIntent
+    | SwitchTopicIntent
     | ResumeTopicIntent
     | RecoverWorkIntent
 )
@@ -278,6 +285,7 @@ class BrowserCommandService:
                 SubmitTurnIntent,
                 SelectTopicIntent,
                 PauseTopicIntent,
+                SwitchTopicIntent,
                 ResumeTopicIntent,
                 RecoverWorkIntent,
             }
@@ -343,6 +351,8 @@ class BrowserCommandService:
             return SelectTopic(command_id, intent.candidate)
         if type(intent) is PauseTopicIntent:
             return PauseTopic(command_id)
+        if type(intent) is SwitchTopicIntent:
+            return SwitchTopic(command_id)
         if type(intent) is ResumeTopicIntent:
             return ResumeTopic(command_id, intent.topic_run_id)
         if type(intent) is RecoverWorkIntent:
@@ -371,6 +381,8 @@ class BrowserCommandService:
             }
         elif type(intent) is PauseTopicIntent:
             intent_tree = {"type": "pause_topic"}
+        elif type(intent) is SwitchTopicIntent:
+            intent_tree = {"type": "switch_topic"}
         elif type(intent) is ResumeTopicIntent:
             intent_tree = {
                 "type": "resume_topic",
@@ -412,6 +424,16 @@ class BrowserCommandService:
         elif type(intent) is SelectTopicIntent:
             trigger = TriggerBinding(
                 TriggerKind.TOPIC_SELECTION,
+                work_id,
+                config.runtime_epoch,
+                None,
+                None,
+                input_digest,
+                evidence.evidence_digest,
+            )
+        elif type(intent) is SwitchTopicIntent:
+            trigger = TriggerBinding(
+                TriggerKind.TOPIC_CANDIDATES,
                 work_id,
                 config.runtime_epoch,
                 None,
@@ -481,7 +503,7 @@ class BrowserCommandService:
                     input_digest,
                     evidence.evidence_digest,
                 )
-        elif type(intent) is not PauseTopicIntent:
+        elif type(intent) not in {PauseTopicIntent, SwitchTopicIntent}:
             raise BrowserServiceError("VALIDATION_FAILED")
         return DecisionContext(state.registry_generation, trigger, evidence)
 
@@ -496,4 +518,5 @@ __all__ = [
     "ResumeTopicIntent",
     "SelectTopicIntent",
     "SubmitTurnIntent",
+    "SwitchTopicIntent",
 ]

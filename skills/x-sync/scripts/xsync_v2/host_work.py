@@ -36,6 +36,7 @@ from .domain import (
     StartTopic,
     TopicResumed,
     TopicSelectionSubmitted,
+    TopicSwitchRequested,
     TopicStarted,
     TriggerBinding,
     WorkFailure,
@@ -168,6 +169,8 @@ def _created_trigger(event: CommittedDialogueEvent) -> TriggerBinding | None:
         return payload.candidate_trigger
     if type(payload) is TopicSelectionSubmitted:
         return payload.next_trigger
+    if type(payload) is TopicSwitchRequested:
+        return payload.candidate_trigger
     if type(payload) is TopicStarted:
         return payload.initial_trigger
     if type(payload) is LearnerTurnSubmitted:

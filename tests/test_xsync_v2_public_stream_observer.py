@@ -89,6 +89,31 @@ class PublicStreamObserverTest(unittest.TestCase):
         ):
             self.assertNotIn(secret, rendered)
 
+    def test_topic_switch_exposes_only_the_paused_topic_identity(self) -> None:
+        observer = PublicStreamObserver(
+            retention_limit=8,
+            subscriber_queue_limit=8,
+        )
+        subscription = observer.subscribe("session-1", after_sequence=0)
+        observer.on_batch(
+            batch(
+                event(
+                    "event-switch",
+                    1,
+                    tag="topic_switch_requested",
+                    fields=(
+                        ("topic_run_id", "topic-1"),
+                        ("work_id", "work-secret"),
+                        ("evidence_digest", "sha256:secret"),
+                    ),
+                )
+            )
+        )
+
+        (projected,) = subscription.read_available()
+        self.assertEqual("topic_switch_requested", projected.event_type)
+        self.assertEqual((("topic_run_id", "topic-1"),), projected.fields)
+
     def test_unknown_or_internal_event_advances_cursor_without_leaking(self) -> None:
         observer = PublicStreamObserver(
             retention_limit=8,

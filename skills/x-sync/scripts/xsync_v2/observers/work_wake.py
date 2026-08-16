@@ -17,6 +17,7 @@ _WORK_TRIGGER_EVENT_TYPES = frozenset(
         "topic_started",
         "learner_turn_submitted",
         "topic_resumed",
+        "topic_switch_requested",
         "work_requeued",
         "work_recovery_requested",
     }

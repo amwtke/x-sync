@@ -12,6 +12,7 @@ from xsync_v2.browser_service import (
     BrowserCommandRequest,
     SelectTopicIntent,
     SubmitTurnIntent,
+    SwitchTopicIntent,
 )
 from xsync_v2.coordinator import DialogueSessionConfig
 from xsync_v2.domain import (
@@ -32,6 +33,7 @@ from xsync_v2.evidence import (
 from xsync_v2.host_context import HostContextError
 from xsync_v2.host_work import (
     HostWorkPublishRequest,
+    HostWorkServiceError,
     host_command_id,
 )
 from xsync_v2.event_codec import ActorKind, DialogueActor, sha256_digest
@@ -137,9 +139,9 @@ class RepositoryContextRuntimeTest(unittest.TestCase):
             )
         )
 
-    def publish_candidates(self, envelope):
+    def publish_candidates(self, envelope, suffix: str = ""):
         work = envelope.work
-        key = "publish-candidates"
+        key = f"publish-candidates{suffix}"
         trigger = TriggerBinding(
             work.kind,
             work.trigger_work_id,
@@ -328,6 +330,57 @@ class RepositoryContextRuntimeTest(unittest.TestCase):
             learner_reply.context.learner_model,
         )
         self.assertEqual(submitted.state.sequence, learner_reply.work.observed_sequence)
+
+        switched = self.runtime.browser.execute(
+            BrowserCommandRequest(
+                "session-1",
+                "switch-topic-1",
+                submitted.state.conversation_version,
+                SwitchTopicIntent(),
+                "learner-1",
+            )
+        )
+        self.assertIsNone(switched.state.active_topic)
+        self.assertEqual(1, len(switched.state.paused_topics))
+        late_key = "late-old-topic-result"
+        late_result = replace(
+            agent_turn("q2"),
+            evidence_refs=("ev.registry-fence",),
+        )
+        with self.assertRaisesRegex(HostWorkServiceError, "WORK_SUPERSEDED"):
+            self.runtime.host.publish(
+                HostWorkPublishRequest(
+                    late_key,
+                    learner_reply.work,
+                    CommitAgentTurn(host_command_id(late_key), late_result),
+                    DecisionContext(
+                        learner_reply.work.registry_generation,
+                        TriggerBinding(
+                            learner_reply.work.kind,
+                            learner_reply.work.trigger_work_id,
+                            learner_reply.work.trigger_runtime_epoch,
+                            learner_reply.work.parent_turn_id,
+                            learner_reply.work.contract_digest,
+                            learner_reply.work.input_digest,
+                            learner_reply.work.evidence_digest,
+                        ),
+                        EvidenceCheck(
+                            EvidenceHealth.CURRENT,
+                            self.config.evidence_digest,
+                        ),
+                    ),
+                    self.config.created_at,
+                    DialogueActor(ActorKind.HOST, "host.repository-context"),
+                    learner_reply.fence,
+                )
+            )
+        switch_candidates = self.claim_current("switch-candidates")
+        self.assertIs(TriggerKind.TOPIC_CANDIDATES, switch_candidates.work.kind)
+        self.assertIsNone(switch_candidates.context.topic_contract)
+
+        presented = self.publish_candidates(switch_candidates, "-after-switch")
+        self.assertEqual("choosing_topic", presented.state.phase.value)
+        self.assertEqual(1, len(presented.state.paused_topics))
 
 
 if __name__ == "__main__":

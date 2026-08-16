@@ -20,6 +20,7 @@ from xsync_v2.browser_service import (
     RecoverWorkIntent,
     ResumeTopicIntent,
     SubmitTurnIntent,
+    SwitchTopicIntent,
 )
 from xsync_v2.coordinator import CoordinatorError, DialogueSessionConfig
 from xsync_v2.domain import (
@@ -39,6 +40,7 @@ from xsync_v2.domain import (
     SelectTopic,
     SessionLifecycle,
     SubmitLearnerTurn,
+    SwitchTopic,
     TaskScope,
     TopicContract,
     TopicLifecycle,
@@ -194,7 +196,7 @@ class BrowserHttpTest(unittest.TestCase):
         self.assertEqual("awaiting_user", payload["phase"])
         self.assertEqual("question-1", payload["topic"]["question"]["id"])
         self.assertEqual(
-            ["pause", "submit_turn"], payload["allowed_actions"]
+            ["pause", "submit_turn", "switch"], payload["allowed_actions"]
         )
         rendered = response.body.decode()
         self.assertNotIn("secret-evidence-ref", rendered)
@@ -253,6 +255,11 @@ class BrowserHttpTest(unittest.TestCase):
                 {"action": "pause"},
                 "pause-key",
                 PauseTopic,
+            ),
+            (
+                {"action": "switch"},
+                "switch-key",
+                SwitchTopic,
             ),
             (
                 {"action": "resume", "topic_run_id": "topic-1"},
@@ -751,6 +758,15 @@ class BrowserServiceTest(unittest.TestCase):
 
     def test_context_variants_are_deterministic_and_typed(self) -> None:
         base = state()
+        self.service.execute(self.command(SwitchTopicIntent(), key="switch"))
+        switch_request = self.coordinator.requests[-1]
+        self.assertIs(type(switch_request.command), SwitchTopic)
+        self.assertIs(
+            TriggerKind.TOPIC_CANDIDATES,
+            switch_request.context.trigger.kind,
+        )
+        self.assertIsNone(switch_request.context.trigger.contract_digest)
+
         paused_open = replace(
             base.active_topic,
             lifecycle=TopicLifecycle.PAUSED,

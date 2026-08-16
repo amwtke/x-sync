@@ -123,6 +123,13 @@
     const pause = byId("pause");
     pause.hidden = !state.allowed_actions.includes("pause");
     pause.onclick = () => mutate("/api/v2/topic", { action: "pause" }, "pause");
+    const switchTopic = byId("switch");
+    switchTopic.hidden = !state.allowed_actions.includes("switch");
+    switchTopic.onclick = () => mutate(
+      "/api/v2/topic",
+      { action: "switch" },
+      "switch",
+    );
 
     const question = topic.question;
     const card = byId("question");

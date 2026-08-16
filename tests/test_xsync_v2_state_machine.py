@@ -44,12 +44,14 @@ from xsync_v2.domain import (
     StartSession,
     StartTopic,
     SubmitLearnerTurn,
+    SwitchTopic,
     TaskScope,
     TopicContract,
     TopicLifecycle,
     TopicPaused,
     TopicResumed,
     TopicSelectionSubmitted,
+    TopicSwitchRequested,
     TopicStarted,
     TriggerBinding,
     TriggerKind,
@@ -205,7 +207,7 @@ def commit_for_test(state, pending):
 
 
 def default_context(state, command):
-    if isinstance(command, (StartSession, PresentCandidates)):
+    if isinstance(command, (StartSession, PresentCandidates, SwitchTopic)):
         return context(TriggerKind.TOPIC_CANDIDATES)
     if isinstance(command, SelectTopic):
         return context(TriggerKind.TOPIC_SELECTION)
@@ -1031,6 +1033,75 @@ class StateMachineTest(unittest.TestCase):
             decide(ended, resume, default_context(ended, resume)),
         )
 
+    def test_switch_atomically_pauses_active_topic_and_queues_candidates(self):
+        state = initial_dialogue_state("dlg-1", 1)
+        state = apply(state, StartSession("c1"))
+        state = apply(state, PresentCandidates("c2", ("支付一致性",)))
+        state = apply(state, StartTopic("c3", contract()))
+        old_work = state.active_topic.work
+
+        command = SwitchTopic("switch")
+        decision = decide(state, command, default_context(state, command))
+
+        self.assertIsInstance(decision, Accepted)
+        assert isinstance(decision, Accepted)
+        self.assertIsInstance(decision.events[0].payload, TopicSwitchRequested)
+        switched = reduce(state, commit_for_test(state, decision.events[0]))
+        self.assertIsNone(switched.active_topic)
+        self.assertEqual(ConversationPhase.WAITING_HOST, switched.phase)
+        self.assertEqual(1, len(switched.paused_topics))
+        self.assertEqual(
+            TopicLifecycle.PAUSED,
+            switched.paused_topics[0].lifecycle,
+        )
+        self.assertIsNotNone(old_work)
+        self.assertEqual(
+            WorkStatus.SUPERSEDED,
+            switched.paused_topics[0].work.status,
+        )
+        self.assertEqual(
+            TriggerKind.TOPIC_CANDIDATES,
+            switched.session_work.trigger.kind,
+        )
+
+        choosing = apply(
+            switched,
+            PresentCandidates("new-candidates", ("重试边界", "证据新鲜度")),
+        )
+        self.assertEqual(ConversationPhase.CHOOSING_TOPIC, choosing.phase)
+        self.assertEqual(1, len(choosing.paused_topics))
+        self.assertEqual(
+            Rejected("TOPIC_STATE_CONFLICT"),
+            decide(
+                switched,
+                CommitAgentTurn("late", agent_turn()),
+                default_context(state, CommitAgentTurn("late", agent_turn())),
+            ),
+        )
+
+    def test_switch_rejects_missing_topic_and_forged_target(self):
+        initial = initial_dialogue_state("dlg-1", 1)
+        command = SwitchTopic("switch")
+        self.assertEqual(
+            Rejected("TOPIC_STATE_CONFLICT"),
+            decide(initial, command, default_context(initial, command)),
+        )
+
+        active = apply(initial, StartSession("c1"))
+        active = apply(active, PresentCandidates("c2", ("支付一致性",)))
+        active = apply(active, StartTopic("c3", contract()))
+        context_value = default_context(active, command)
+        forged = CommittedDialogueEvent(
+            "event-forged-switch",
+            active.sequence + 1,
+            active.conversation_version,
+            active.conversation_version + 1,
+            command.command_id,
+            TopicSwitchRequested("other-topic", context_value.trigger),
+        )
+        with self.assertRaisesRegex(ValueError, "ILLEGAL_EVENT_TRANSITION"):
+            reduce(active, forged)
+
     def test_resume_rebuilds_the_paused_unresolved_trigger(self):
         state = initial_dialogue_state("dlg-1", 1)
         state = apply(state, StartSession("c1"))
@@ -1241,6 +1312,10 @@ class StateMachineTest(unittest.TestCase):
                 cast(TriggerBinding, None),
             ),
             TopicPaused(cast(str, None)),
+            TopicSwitchRequested(
+                "topic-1",
+                cast(TriggerBinding, None),
+            ),
             TopicResumed(
                 "topic-1",
                 cast(bool, 1),

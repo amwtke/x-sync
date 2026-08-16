@@ -153,6 +153,9 @@ class LoopbackBrowserServerTest(unittest.TestCase):
             javascript,
         )
         self.assertIn("/api/v2/stream?after=", javascript)
+        self.assertIn('id="switch"', html)
+        self.assertIn("切换话题", html)
+        self.assertIn('{ action: "switch" }', javascript)
         self.assertNotIn("EventSource", javascript)
         self.assertNotIn("innerHTML", javascript)
 

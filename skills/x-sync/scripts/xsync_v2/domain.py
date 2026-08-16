@@ -338,6 +338,13 @@ class PauseTopic:
 
 
 @dataclass(frozen=True, slots=True)
+class SwitchTopic:
+    """Pause the active Topic and request fresh candidates atomically."""
+
+    command_id: str
+
+
+@dataclass(frozen=True, slots=True)
 class ResumeTopic:
     command_id: str
     topic_run_id: str
@@ -382,6 +389,7 @@ DialogueCommand: TypeAlias = (
     | CommitAgentTurn
     | SubmitLearnerTurn
     | PauseTopic
+    | SwitchTopic
     | ResumeTopic
     | ReportWorkFailure
     | RecoverWork
@@ -437,6 +445,14 @@ class TopicPaused:
     cause: PauseCause = PauseCause.USER
     handoff_id: str | None = None
     fence_generation: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class TopicSwitchRequested:
+    """Atomic active-Topic pause and Session candidate-work creation."""
+
+    topic_run_id: str
+    candidate_trigger: TriggerBinding
 
 
 @dataclass(frozen=True, slots=True)
@@ -505,6 +521,7 @@ DialogueEventPayload: TypeAlias = (
     | AgentTurnCommitted
     | LearnerTurnSubmitted
     | TopicPaused
+    | TopicSwitchRequested
     | SessionDeactivationPrepared
     | TopicResumed
     | WorkFailed

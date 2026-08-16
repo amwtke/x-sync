@@ -23,6 +23,7 @@ from .browser_service import (
     ResumeTopicIntent,
     SelectTopicIntent,
     SubmitTurnIntent,
+    SwitchTopicIntent,
 )
 from .domain import (
     ConversationPhase,
@@ -218,6 +219,7 @@ def _allowed_actions(state: DialogueState) -> tuple[str, ...]:
     actions: set[str] = set()
     if state.active_topic is not None:
         actions.add("pause")
+        actions.add("switch")
     if state.phase is ConversationPhase.AWAITING_USER:
         actions.add("submit_turn")
     if state.phase is ConversationPhase.CHOOSING_TOPIC:
@@ -546,6 +548,8 @@ class BrowserApi:
             return SelectTopicIntent(candidate)
         if action == "pause" and set(body) == {"action"}:
             return PauseTopicIntent()
+        if action == "switch" and set(body) == {"action"}:
+            return SwitchTopicIntent()
         if action == "resume" and set(body) == {"action", "topic_run_id"}:
             topic_run_id = body["topic_run_id"]
             if type(topic_run_id) is not str:

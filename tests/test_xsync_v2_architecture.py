@@ -22,6 +22,7 @@ from xsync_v2.browser_service import (
     ResumeTopicIntent,
     SelectTopicIntent,
     SubmitTurnIntent,
+    SwitchTopicIntent,
 )
 from xsync_v2.coordinator import (
     DialogueCoordinator,
@@ -240,6 +241,7 @@ class ArchitectureTest(unittest.TestCase):
             SubmitTurnIntent,
             SelectTopicIntent,
             PauseTopicIntent,
+            SwitchTopicIntent,
             ResumeTopicIntent,
             RecoverWorkIntent,
             BrowserCommandService,

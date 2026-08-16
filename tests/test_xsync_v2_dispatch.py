@@ -30,6 +30,7 @@ from xsync_v2.domain import (
     TopicPaused,
     TopicResumed,
     TopicSelectionSubmitted,
+    TopicSwitchRequested,
     TopicStarted,
     TriggerBinding,
     TriggerKind,
@@ -318,11 +319,16 @@ class DispatchTest(unittest.TestCase):
             dialogue_event(
                 "event-3",
                 3,
-                SessionDeactivationPrepared("handoff-1", 2, trigger()),
+                TopicSwitchRequested("topic-1", trigger()),
             ),
             dialogue_event(
                 "event-4",
                 4,
+                SessionDeactivationPrepared("handoff-1", 2, trigger()),
+            ),
+            dialogue_event(
+                "event-5",
+                5,
                 TopicResumed(
                     "topic-1",
                     True,
@@ -338,6 +344,7 @@ class DispatchTest(unittest.TestCase):
             (
                 "learner_turn_submitted",
                 "topic_paused",
+                "topic_switch_requested",
                 "session_deactivation_prepared",
                 "topic_resumed",
             ),
