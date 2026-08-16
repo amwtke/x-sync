@@ -113,6 +113,12 @@ from xsync_v2.repository_context import RepositoryHostContextProvider
 from xsync_v2.runtime import DialogueRuntime, DialogueRuntimeError
 from xsync_v2.secure_fs import SecureDirectory, SecureDirectoryIdentity
 from xsync_v2.state_machine import TRANSITION_TABLE, decide, reduce
+from xsync_v2.submission_store import (
+    SubmissionHandleRecord,
+    SubmissionHandleStore,
+    SubmissionRegistrationOutcome,
+    SubmissionStoreError,
+)
 from xsync_v2.work import derive_runnable_work
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -309,6 +315,14 @@ class ArchitectureTest(unittest.TestCase):
             HostSupervisor.submit,
             HostSupervisor.close,
             HostSupervisor.run,
+            SubmissionStoreError,
+            SubmissionHandleRecord,
+            SubmissionRegistrationOutcome,
+            SubmissionHandleStore,
+            SubmissionHandleStore.register,
+            SubmissionHandleStore.resolve,
+            SubmissionHandleStore.confirm,
+            SubmissionHandleStore.close,
             BrowserCommandRequest,
             SubmitTurnIntent,
             SelectTopicIntent,
