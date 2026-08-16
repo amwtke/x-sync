@@ -86,6 +86,19 @@ def _parser() -> _ArgumentParser:
     renew.add_argument("--lease-version", type=_positive, required=True)
     renew.add_argument("--lease-seconds", type=_positive, required=True)
 
+    reclaim = commands.add_parser("reclaim")
+    _common(reclaim)
+    reclaim.add_argument("--session", required=True)
+    reclaim.add_argument("--request-id", required=True)
+    reclaim.add_argument("--claim", dest="claim_id", required=True)
+    reclaim.add_argument("--work", dest="work_id", required=True)
+    reclaim.add_argument("--owner", dest="owner_id", required=True)
+    reclaim.add_argument("--work-attempt", type=_positive, required=True)
+    reclaim.add_argument("--lease-seconds", type=_positive, required=True)
+    reclaim.add_argument("--max-tenure-seconds", type=_positive, required=True)
+    reclaim.add_argument("--occurred-at", required=True)
+    reclaim.add_argument("--actor-id", required=True)
+
     publish = commands.add_parser("publish")
     _common(publish)
     publish.add_argument("--idempotency-key", required=True)
@@ -236,6 +249,19 @@ def _request(arguments: argparse.Namespace) -> bytes:
             owner_id=arguments.owner_id,
             expected_lease_version=arguments.lease_version,
             lease_seconds=arguments.lease_seconds,
+        )
+    elif operation == "reclaim":
+        request.update(
+            session_id=arguments.session,
+            request_id=arguments.request_id,
+            claim_id=arguments.claim_id,
+            work_id=arguments.work_id,
+            owner_id=arguments.owner_id,
+            expected_work_attempt=arguments.work_attempt,
+            lease_seconds=arguments.lease_seconds,
+            max_tenure_seconds=arguments.max_tenure_seconds,
+            occurred_at=arguments.occurred_at,
+            actor_id=arguments.actor_id,
         )
     elif operation == "publish":
         work, fence = _claim_payload(arguments.claim_envelope)

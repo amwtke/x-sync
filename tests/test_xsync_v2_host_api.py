@@ -58,7 +58,7 @@ class HostApiTest(unittest.TestCase):
             context_provider=ApiContextProvider(),
             runtime_authority_verifier=lambda check, _authority: (
                 check.runtime_epoch == "runtime-1"
-                and check.owner_id == "owner-1"
+                and check.owner_id in {"owner-1", "owner-2", "owner-3", "owner-4"}
             ),
             lease_clock=lambda: self.now,
             browser_clock=lambda: "2026-08-16T18:00:00+08:00",
@@ -175,6 +175,51 @@ class HostApiTest(unittest.TestCase):
         self.assertTrue(renewed["ok"])
         self.assertFalse(renewed["payload"]["replayed"])
         self.assertEqual(2, renewed["payload"]["lease"]["lease_version"])
+
+    def test_reclaim_recovers_expired_tenures_and_advances_exhaustion(self) -> None:
+        claimed = self.claim()
+        lease = claimed["lease"]
+
+        def reclaim(number):
+            return self.request(
+                "reclaim",
+                session_id="session-1",
+                request_id=f"reclaim-request-{number}",
+                claim_id=f"claim-reclaimed-{number}",
+                work_id=lease["work_id"],
+                owner_id=f"owner-{number + 1}",
+                expected_work_attempt=1,
+                lease_seconds=30,
+                max_tenure_seconds=120,
+                occurred_at=self.config.created_at,
+                actor_id="runtime.supervisor-1",
+            )
+
+        self.now = lease["expires_at"]
+        first = reclaim(1)
+        self.assertTrue(first["ok"])
+        self.assertEqual("claimed", first["payload"]["disposition"])
+        self.assertEqual(lease["work_id"], first["payload"]["work"]["work_id"])
+
+        self.now = first["payload"]["lease"]["expires_at"]
+        second = reclaim(2)
+        self.assertTrue(second["ok"])
+        self.assertEqual("claimed", second["payload"]["disposition"])
+
+        self.now = second["payload"]["lease"]["expires_at"]
+        exhausted = reclaim(3)
+        self.assertTrue(exhausted["ok"])
+        self.assertEqual("requeued", exhausted["payload"]["disposition"])
+        self.assertEqual(1, exhausted["payload"]["work_attempt"])
+        self.assertFalse(exhausted["payload"]["replayed"])
+
+        replayed = reclaim(3)
+        self.assertTrue(replayed["ok"])
+        self.assertTrue(replayed["payload"]["replayed"])
+        self.assertEqual(
+            exhausted["payload"]["through_event_sequence"],
+            replayed["payload"]["through_event_sequence"],
+        )
 
     def test_malformed_requests_fail_closed_without_exception_details(self) -> None:
         requests = (

@@ -15,7 +15,13 @@ from .event_codec import (
     canonical_json_bytes,
 )
 from .host_context import HostContextError, encode_host_context
-from .host_control import HostControl, HostControlError
+from .host_control import (
+    HostClaimEnvelope,
+    HostControl,
+    HostControlError,
+    HostReclaimRequest,
+    HostWorkAdvanced,
+)
 from .host_result import HostResultError, decode_host_result
 from .host_work import (
     HostResultPublishRequest,
@@ -27,6 +33,7 @@ from .lease_store import (
     LeaseRecord,
     LeaseStoreError,
     PublishFence,
+    ReclaimRequest,
     RenewRequest,
 )
 from .work import RunnableWork, WorkError, validate_runnable_work
@@ -260,7 +267,7 @@ def _failure(operation: object, code: str) -> HostApiResponse:
     safe_operation = (
         operation
         if type(operation) is str
-        and operation in {"wait", "claim", "renew", "publish"}
+        and operation in {"wait", "claim", "renew", "reclaim", "publish"}
         else "invalid"
     )
     return HostApiResponse(
@@ -296,6 +303,8 @@ class HostApi:
                 return self._claim(request)
             if operation == "renew":
                 return self._renew(request)
+            if operation == "reclaim":
+                return self._reclaim(request)
             if operation == "publish":
                 return self._publish(request)
             raise HostApiError("HOST_API_OPERATION_UNSUPPORTED")
@@ -411,6 +420,70 @@ class HostApi:
                 "replayed": outcome.replayed,
             },
         )
+
+    def _reclaim(self, request: dict[str, object]) -> HostApiResponse:
+        _keys(
+            request,
+            frozenset(
+                {
+                    "session_id",
+                    "request_id",
+                    "claim_id",
+                    "work_id",
+                    "owner_id",
+                    "expected_work_attempt",
+                    "lease_seconds",
+                    "max_tenure_seconds",
+                    "occurred_at",
+                    "actor_id",
+                }
+            ),
+        )
+        expected_attempt = _positive_int(request["expected_work_attempt"])
+        outcome = self._control.reclaim(
+            HostReclaimRequest(
+                ReclaimRequest(
+                    _identifier(request["session_id"]),
+                    _identifier(request["request_id"]),
+                    _identifier(request["claim_id"]),
+                    _identifier(request["work_id"]),
+                    _identifier(request["owner_id"]),
+                    expected_attempt,
+                    _positive_int(request["lease_seconds"]),
+                    _positive_int(request["max_tenure_seconds"]),
+                ),
+                cast(str, request["occurred_at"]),
+                DialogueActor(
+                    ActorKind.RUNTIME,
+                    _identifier(request["actor_id"]),
+                ),
+            )
+        )
+        if type(outcome) is HostClaimEnvelope:
+            return _success(
+                "reclaim",
+                {
+                    "disposition": "claimed",
+                    "work_attempt": expected_attempt,
+                    "work": _work_tree(outcome.work),
+                    "lease": _lease_tree(outcome.lease),
+                    "fence": _fence_tree(outcome.fence),
+                    "context": json.loads(encode_host_context(outcome.context)),
+                },
+            )
+        if type(outcome) is HostWorkAdvanced:
+            return _success(
+                "reclaim",
+                {
+                    "disposition": outcome.disposition.value,
+                    "work_attempt": expected_attempt,
+                    "work_id": outcome.work_id,
+                    "conversation_version": outcome.conversation_version,
+                    "through_event_sequence": outcome.through_event_sequence,
+                    "replayed": outcome.replayed,
+                },
+            )
+        raise HostApiError("HOST_API_OUTCOME_INVALID")
 
     def _publish(self, request: dict[str, object]) -> HostApiResponse:
         _keys(

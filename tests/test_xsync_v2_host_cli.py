@@ -70,7 +70,7 @@ class HostCliTest(unittest.TestCase):
             context_provider=CliContextProvider(),
             runtime_authority_verifier=lambda check, _authority: (
                 check.runtime_epoch == "runtime-1"
-                and check.owner_id == "owner-1"
+                and check.owner_id in {"owner-1", "owner-2"}
             ),
             lease_clock=lambda: self.now,
             browser_clock=lambda: "2026-08-16T20:00:00+08:00",
@@ -123,7 +123,7 @@ class HostCliTest(unittest.TestCase):
             "--work",
             work_id,
             "--owner",
-            "owner-1",
+            "owner-2",
             "--lease-seconds",
             "30",
             "--max-tenure-seconds",
@@ -201,6 +201,43 @@ class HostCliTest(unittest.TestCase):
             "choosing_topic",
             self.runtime.browser.current("session-1").dialogue_state.phase.value,
         )
+
+    def test_reclaim_is_the_shared_crash_recovery_primitive(self) -> None:
+        claimed = self.claim()
+        lease = claimed[2]["payload"]["lease"]
+        self.now = lease["expires_at"]
+
+        reclaimed = self.run_cli(
+            "reclaim",
+            "--socket",
+            str(self.socket_path),
+            "--session",
+            "session-1",
+            "--request-id",
+            "reclaim-request-1",
+            "--claim",
+            "claim-reclaimed-1",
+            "--work",
+            lease["work_id"],
+            "--owner",
+            "owner-1",
+            "--work-attempt",
+            "1",
+            "--lease-seconds",
+            "30",
+            "--max-tenure-seconds",
+            "120",
+            "--occurred-at",
+            self.config.created_at,
+            "--actor-id",
+            "runtime.supervisor-1",
+            "--json",
+        )
+
+        self.assertEqual(0, reclaimed[0])
+        self.assertEqual("claimed", reclaimed[2]["payload"]["disposition"])
+        self.assertEqual(1, len(reclaimed[1]))
+        self.assertEqual("", reclaimed[3])
 
     def test_api_failure_is_stdout_json_and_transport_failure_is_stderr(self) -> None:
         failed = self.run_cli(
