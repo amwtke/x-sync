@@ -7,6 +7,7 @@ from typing import get_args
 
 import tests.xsync_v2_path  # noqa: F401
 
+# isort: split
 from xsync_v2 import event_store, registry_store
 from xsync_v2.browser_http import (
     BrowserApi,
@@ -50,7 +51,8 @@ from xsync_v2.evidence import (
     encode_evidence_snapshot,
 )
 from xsync_v2.host_api import HostApi, HostApiError, HostApiResponse
-from xsync_v2.host_cli import HostCliError, main as host_cli_main
+from xsync_v2.host_cli import HostCliError
+from xsync_v2.host_cli import main as host_cli_main
 from xsync_v2.host_context import (
     EvidenceContextClaim,
     HostContextCapsule,
@@ -80,6 +82,12 @@ from xsync_v2.host_result import (
     decode_host_result,
     encode_host_result,
     host_result_command,
+)
+from xsync_v2.host_supervisor import (
+    HostSupervisor,
+    HostSupervisorError,
+    HostSupervisorSubmission,
+    WaitStrategy,
 )
 from xsync_v2.host_work import (
     HostResultPublishRequest,
@@ -154,6 +162,7 @@ class ArchitectureTest(unittest.TestCase):
             PACKAGE / "host_context.py",
             PACKAGE / "host_control.py",
             PACKAGE / "host_result.py",
+            PACKAGE / "host_supervisor.py",
         )
         forbidden_imports = {
             "asyncio",
@@ -293,6 +302,13 @@ class ArchitectureTest(unittest.TestCase):
             decode_host_result,
             encode_host_result,
             host_result_command,
+            HostSupervisorError,
+            HostSupervisorSubmission,
+            WaitStrategy,
+            HostSupervisor,
+            HostSupervisor.submit,
+            HostSupervisor.close,
+            HostSupervisor.run,
             BrowserCommandRequest,
             SubmitTurnIntent,
             SelectTopicIntent,
