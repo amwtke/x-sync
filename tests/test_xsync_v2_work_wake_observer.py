@@ -1,8 +1,6 @@
 import unittest
 from dataclasses import FrozenInstanceError, fields
 
-import tests.xsync_v2_path  # noqa: F401
-
 from xsync_v2.observer import (
     CommittedBatch,
     CommittedEventView,
@@ -11,6 +9,8 @@ from xsync_v2.observer import (
     StreamKind,
 )
 from xsync_v2.observers.work_wake import WorkWakeHint, WorkWakeObserver
+
+import tests.xsync_v2_path  # noqa: F401
 
 
 def event(event_id: str, sequence: int, tag: str) -> CommittedEventView:
@@ -90,6 +90,7 @@ class WorkWakeObserverTest(unittest.TestCase):
         tags = (
             "session_started",
             "topic_selection_submitted",
+            "topic_clarification_answered",
             "topic_started",
             "learner_turn_submitted",
             "topic_resumed",

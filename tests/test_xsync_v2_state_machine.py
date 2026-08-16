@@ -13,6 +13,7 @@ from xsync_v2.domain import (
     Accepted,
     AgentTurnCommitted,
     AgentTurnResult,
+    AnswerTopicClarification,
     CandidatesPresented,
     CommitAgentTurn,
     CommittedDialogueEvent,
@@ -37,6 +38,7 @@ from xsync_v2.domain import (
     RecoverWork,
     Rejected,
     ReportWorkFailure,
+    RequestTopicClarification,
     ResumeTopic,
     SelectTopic,
     SessionLifecycle,
@@ -52,8 +54,8 @@ from xsync_v2.domain import (
     TopicPaused,
     TopicResumed,
     TopicSelectionSubmitted,
-    TopicSwitchRequested,
     TopicStarted,
+    TopicSwitchRequested,
     TriggerBinding,
     TriggerKind,
     WorkDeadLettered,
@@ -212,6 +214,23 @@ def default_context(state, command):
         return context(TriggerKind.TOPIC_CANDIDATES)
     if isinstance(command, (SelectTopic, SubmitCustomTopic)):
         return context(TriggerKind.TOPIC_SELECTION)
+    if isinstance(command, RequestTopicClarification):
+        work = state.session_work
+        assert work is not None
+        return DecisionContext(
+            state.registry_generation,
+            work.trigger,
+            EvidenceCheck(
+                EvidenceHealth.CURRENT,
+                work.trigger.evidence_digest,
+            ),
+        )
+    if isinstance(command, AnswerTopicClarification):
+        return context(
+            TriggerKind.TOPIC_SELECTION,
+            work_id=f"work-{command.question_id}",
+            parent_turn_id=command.question_id,
+        )
     if isinstance(command, StartTopic):
         return context(TriggerKind.INITIAL_TURN)
     if isinstance(command, CommitAgentTurn):
@@ -355,6 +374,88 @@ class StateMachineTest(unittest.TestCase):
         self.assertIsNotNone(state.session_work)
         assert state.session_work is not None
         self.assertIs(TriggerKind.TOPIC_SELECTION, state.session_work.trigger.kind)
+
+    def test_topic_clarification_is_durable_before_topic_start(self):
+        state = apply(initial_dialogue_state("dlg-clarify", 1), StartSession("start"))
+        state = apply(
+            state,
+            PresentCandidates("candidates", ("支付一致性", "Outbox")),
+        )
+        state = apply(
+            state,
+            SubmitCustomTopic("custom", "结算失败后的人工处置"),
+            context(TriggerKind.TOPIC_SELECTION, work_id="selection"),
+        )
+        selection_work = state.session_work
+        assert selection_work is not None
+
+        state = apply(
+            state,
+            RequestTopicClarification(
+                "clarify",
+                "clarification-1",
+                "你更关心业务责任还是技术补偿？",
+            ),
+        )
+        self.assertIs(ConversationPhase.CLARIFYING_TOPIC, state.phase)
+        self.assertIsNone(state.session_work)
+        self.assertIsNotNone(state.topic_clarification)
+        assert state.topic_clarification is not None
+        self.assertIsNone(state.topic_clarification.answer)
+
+        wrong = AnswerTopicClarification(
+            "wrong-answer",
+            "clarification-other",
+            "业务责任",
+        )
+        self.assertEqual(
+            Rejected("TOPIC_STATE_CONFLICT"),
+            decide(state, wrong, default_context(state, wrong)),
+        )
+        answer = AnswerTopicClarification(
+            "answer",
+            "clarification-1",
+            "先厘清业务责任，再映射到技术补偿。",
+        )
+        bad_parent = context(
+            TriggerKind.TOPIC_SELECTION,
+            work_id="clarified-selection",
+            parent_turn_id="clarification-other",
+        )
+        self.assertEqual(
+            Rejected("VALIDATION_FAILED"),
+            decide(state, answer, bad_parent),
+        )
+
+        state = apply(state, answer)
+        self.assertIs(ConversationPhase.WAITING_HOST, state.phase)
+        self.assertIsNotNone(state.session_work)
+        assert state.session_work is not None
+        self.assertEqual(
+            "clarification-1",
+            state.session_work.trigger.parent_turn_id,
+        )
+        assert state.topic_clarification is not None
+        self.assertEqual(
+            "先厘清业务责任，再映射到技术补偿。",
+            state.topic_clarification.answer,
+        )
+        self.assertNotEqual(
+            selection_work.work_id,
+            state.session_work.work_id,
+        )
+
+        state = apply(
+            state,
+            StartTopic(
+                "start-topic-after-clarification",
+                contract(),
+                "结算失败后的人工处置",
+            ),
+            context(TriggerKind.INITIAL_TURN, work_id="initial-after-clarify"),
+        )
+        self.assertIsNone(state.topic_clarification)
+        self.assertIsNotNone(state.active_topic)
 
     def test_socratic_turn_uses_one_canonical_path(self):
         state = initial_dialogue_state("dlg-1", 1)

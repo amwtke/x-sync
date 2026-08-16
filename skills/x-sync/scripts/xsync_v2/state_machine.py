@@ -10,6 +10,7 @@ from .domain import (
     Accepted,
     AgentTurnCommitted,
     AgentTurnResult,
+    AnswerTopicClarification,
     CandidatesPresented,
     CommitAgentTurn,
     CommittedDialogueEvent,
@@ -19,7 +20,6 @@ from .domain import (
     DecisionContext,
     DialogueCommand,
     DialogueEventPayload,
-    SessionLifecycle,
     DialogueState,
     EvidenceCheck,
     EvidenceHealth,
@@ -34,33 +34,38 @@ from .domain import (
     LearnerModelEntry,
     LearnerTurnSubmitted,
     Lens,
-    PauseTopic,
     PauseCause,
+    PauseTopic,
     PendingDialogueEvent,
-    PresentCandidates,
     PrepareSessionDeactivation,
+    PresentCandidates,
     QuestionIntent,
     RecoverWork,
     Rejected,
     ReportWorkFailure,
+    RequestTopicClarification,
     ResumeTopic,
     SelectTopic,
-    SessionStarted,
     SessionDeactivationPrepared,
+    SessionLifecycle,
+    SessionStarted,
     StartSession,
     StartTopic,
     SubmitCustomTopic,
     SubmitLearnerTurn,
     SwitchTopic,
     TaskScope,
-    TopicLifecycle,
+    TopicClarification,
+    TopicClarificationAnswered,
+    TopicClarificationRequested,
     TopicContract,
+    TopicLifecycle,
     TopicPaused,
     TopicResumed,
     TopicRunState,
     TopicSelectionSubmitted,
-    TopicSwitchRequested,
     TopicStarted,
+    TopicSwitchRequested,
     TriggerBinding,
     TriggerKind,
     WorkDeadLettered,
@@ -81,7 +86,6 @@ from .work_identity import (
     is_protocol_id,
     is_sha256_digest,
 )
-
 
 Handler: TypeAlias = Callable[
     [DialogueState, DialogueCommand, DecisionContext], Decision
@@ -821,6 +825,71 @@ def _submit_custom_topic(
     )
 
 
+def _request_topic_clarification(
+    state: DialogueState, command: DialogueCommand, context: DecisionContext
+) -> Decision:
+    if type(command) is not RequestTopicClarification:
+        return Rejected("TOPIC_STATE_CONFLICT")
+    work = state.session_work
+    if (
+        state.phase is not ConversationPhase.WAITING_HOST
+        or state.active_topic is not None
+        or state.selected_candidate is None
+        or work is None
+        or work.status is not WorkStatus.QUEUED
+        or work.trigger.kind is not TriggerKind.TOPIC_SELECTION
+    ):
+        return Rejected("TOPIC_STATE_CONFLICT")
+    if not _valid_text(command.question_id) or not _valid_text(command.question):
+        return Rejected("VALIDATION_FAILED")
+    if context.trigger != work.trigger:
+        return Rejected("WORK_SUPERSEDED")
+    return _accept(
+        command.command_id,
+        TopicClarificationRequested(
+            command.question_id,
+            command.question,
+            work.trigger,
+        ),
+    )
+
+
+def _answer_topic_clarification(
+    state: DialogueState, command: DialogueCommand, context: DecisionContext
+) -> Decision:
+    if type(command) is not AnswerTopicClarification:
+        return Rejected("TOPIC_STATE_CONFLICT")
+    clarification = state.topic_clarification
+    if (
+        state.phase is not ConversationPhase.CLARIFYING_TOPIC
+        or state.active_topic is not None
+        or state.selected_candidate is None
+        or state.session_work is not None
+        or clarification is None
+        or clarification.answer is not None
+        or clarification.question_id != command.question_id
+    ):
+        return Rejected("TOPIC_STATE_CONFLICT")
+    if not _valid_text(command.answer):
+        return Rejected("VALIDATION_FAILED")
+    trigger = _matching_trigger(
+        context.trigger,
+        TriggerKind.TOPIC_SELECTION,
+        None,
+        context.evidence.evidence_digest,
+    )
+    if trigger is None or trigger.parent_turn_id != command.question_id:
+        return Rejected("VALIDATION_FAILED")
+    return _accept(
+        command.command_id,
+        TopicClarificationAnswered(
+            command.question_id,
+            command.answer,
+            trigger,
+        ),
+    )
+
+
 def _start_topic(
     state: DialogueState, command: DialogueCommand, context: DecisionContext
 ) -> Decision:
@@ -839,6 +908,10 @@ def _start_topic(
         and state.session_work.trigger.kind is TriggerKind.TOPIC_SELECTION
         and state.selected_candidate is not None
         and command.selected_candidate == state.selected_candidate
+        and (
+            state.topic_clarification is None
+            or state.topic_clarification.answer is not None
+        )
     )
     if state.active_topic is not None or not (legacy_selection or durable_selection):
         return Rejected("TOPIC_STATE_CONFLICT")
@@ -1265,6 +1338,8 @@ TRANSITION_TABLE: dict[type, Handler] = {
     PresentCandidates: _present_candidates,
     SelectTopic: _select_topic,
     SubmitCustomTopic: _submit_custom_topic,
+    RequestTopicClarification: _request_topic_clarification,
+    AnswerTopicClarification: _answer_topic_clarification,
     StartTopic: _start_topic,
     CommitAgentTurn: _commit_agent_turn,
     SubmitLearnerTurn: _submit_turn,
@@ -1405,6 +1480,18 @@ def validate_state(state: DialogueState) -> None:
             and not _valid_text(state.selected_candidate)
         )
         or (
+            state.topic_clarification is not None
+            and (
+                type(state.topic_clarification) is not TopicClarification
+                or not _valid_text(state.topic_clarification.question_id)
+                or not _valid_text(state.topic_clarification.question)
+                or (
+                    state.topic_clarification.answer is not None
+                    and not _valid_text(state.topic_clarification.answer)
+                )
+            )
+        )
+        or (
             state.session_work is not None
             and not _valid_current_work(
                 state.session_work,
@@ -1444,6 +1531,13 @@ def validate_state(state: DialogueState) -> None:
     ):
         raise ValueError("STATE_INVARIANT_VIOLATION")
     if state.phase is ConversationPhase.CHOOSING_TOPIC and state.selected_candidate:
+        raise ValueError("STATE_INVARIANT_VIOLATION")
+    if state.phase is ConversationPhase.CLARIFYING_TOPIC and (
+        state.selected_candidate is None
+        or state.topic_clarification is None
+        or state.topic_clarification.answer is not None
+        or state.session_work is not None
+    ):
         raise ValueError("STATE_INVARIANT_VIOLATION")
     if (
         state.phase is not ConversationPhase.CHOOSING_TOPIC
@@ -1510,7 +1604,21 @@ def validate_state(state: DialogueState) -> None:
             )
         ):
             raise ValueError("STATE_INVARIANT_VIOLATION")
-    elif state.selected_candidate is not None:
+    elif (
+        state.selected_candidate is not None
+        and state.phase is not ConversationPhase.CLARIFYING_TOPIC
+    ):
+        raise ValueError("STATE_INVARIANT_VIOLATION")
+    if state.topic_clarification is not None and (
+        state.selected_candidate is None
+        or topic is not None
+        or state.phase
+        not in {ConversationPhase.CLARIFYING_TOPIC, ConversationPhase.WAITING_HOST}
+        or (
+            state.phase is ConversationPhase.WAITING_HOST
+            and state.topic_clarification.answer is None
+        )
+    ):
         raise ValueError("STATE_INVARIANT_VIOLATION")
     if (
         state.session_work is not None
@@ -1551,6 +1659,8 @@ EVENT_PAYLOAD_TYPES = frozenset(
         SessionStarted,
         CandidatesPresented,
         TopicSelectionSubmitted,
+        TopicClarificationRequested,
+        TopicClarificationAnswered,
         TopicStarted,
         AgentTurnCommitted,
         LearnerTurnSubmitted,
@@ -1576,6 +1686,18 @@ def _valid_event_payload_shape(payload: object) -> bool:
     if type(payload) is TopicSelectionSubmitted:
         return _valid_text(payload.candidate) and is_canonical_trigger_binding(
             payload.next_trigger
+        )
+    if type(payload) is TopicClarificationRequested:
+        return (
+            _valid_text(payload.question_id)
+            and _valid_text(payload.question)
+            and is_canonical_trigger_binding(payload.selection_trigger)
+        )
+    if type(payload) is TopicClarificationAnswered:
+        return (
+            _valid_text(payload.question_id)
+            and _valid_text(payload.answer)
+            and is_canonical_trigger_binding(payload.next_trigger)
         )
     if type(payload) is TopicStarted:
         return (
@@ -1778,6 +1900,57 @@ def reduce(
                 event,
                 payload.next_trigger,
             ),
+            topic_clarification=None,
+        )
+    elif type(payload) is TopicClarificationRequested:
+        _require(
+            state.phase is ConversationPhase.WAITING_HOST
+            and state.active_topic is None
+            and state.selected_candidate is not None
+            and state.session_work is not None
+            and state.session_work.status is WorkStatus.QUEUED
+            and state.session_work.trigger.kind is TriggerKind.TOPIC_SELECTION
+            and payload.selection_trigger == state.session_work.trigger
+        )
+        next_state = replace(
+            next_state,
+            phase=ConversationPhase.CLARIFYING_TOPIC,
+            session_work=None,
+            topic_clarification=TopicClarification(
+                payload.question_id,
+                payload.question,
+            ),
+        )
+    elif type(payload) is TopicClarificationAnswered:
+        clarification = state.topic_clarification
+        _require(
+            state.phase is ConversationPhase.CLARIFYING_TOPIC
+            and state.active_topic is None
+            and state.selected_candidate is not None
+            and state.session_work is None
+            and clarification is not None
+            and clarification.answer is None
+            and clarification.question_id == payload.question_id
+            and _valid_trigger(
+                payload.next_trigger,
+                TriggerKind.TOPIC_SELECTION,
+                None,
+                payload.next_trigger.evidence_digest,
+            )
+            and payload.next_trigger.parent_turn_id == payload.question_id
+        )
+        next_state = replace(
+            next_state,
+            phase=ConversationPhase.WAITING_HOST,
+            session_work=_queued_work_from_event(
+                state.session_id,
+                event,
+                payload.next_trigger,
+            ),
+            topic_clarification=replace(
+                cast(TopicClarification, clarification),
+                answer=payload.answer,
+            ),
         )
     elif type(payload) is TopicStarted:
         legacy_selection = (
@@ -1836,6 +2009,7 @@ def reduce(
             active_topic=topic,
             candidates=(),
             selected_candidate=None,
+            topic_clarification=None,
             session_work=None,
             phase=ConversationPhase.WAITING_HOST,
         )
@@ -1986,6 +2160,7 @@ def reduce(
             paused_topics=(*state.paused_topics, paused),
             candidates=(),
             selected_candidate=None,
+            topic_clarification=None,
             session_work=_queued_work_from_event(
                 state.session_id,
                 event,
@@ -2016,6 +2191,7 @@ def reduce(
             phase=ConversationPhase.NONE,
             candidates=(),
             selected_candidate=None,
+            topic_clarification=None,
             session_work=None,
         )
     elif type(payload) is TopicResumed:

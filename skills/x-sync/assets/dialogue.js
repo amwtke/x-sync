@@ -166,6 +166,34 @@
     };
   }
 
+  function renderClarification(state) {
+    const clarification = state.topic_clarification;
+    const panel = byId("clarification");
+    const visible = state.allowed_actions.includes("answer_clarification")
+      && clarification
+      && !clarification.answered;
+    panel.hidden = !visible;
+    if (!visible) return;
+    byId("clarification-question").textContent = clarification.question;
+    byId("clarification-form").onsubmit = (event) => {
+      event.preventDefault();
+      const answer = byId("clarification-answer");
+      const text = answer.value.trim();
+      if (!text) return;
+      mutate(
+        "/api/v2/topic",
+        {
+          action: "answer_clarification",
+          question_id: clarification.question_id,
+          answer: text,
+        },
+        "topic-clarification",
+      ).then((committed) => {
+        if (committed) answer.value = "";
+      });
+    };
+  }
+
   function renderPaused(state) {
     const panel = byId("paused");
     const list = byId("paused-list");
@@ -190,6 +218,7 @@
   function render(state) {
     connection.textContent = `已连接 · ${state.phase}`;
     renderCandidates(state);
+    renderClarification(state);
     renderTopic(state);
     renderPaused(state);
     const waiting = byId("waiting");

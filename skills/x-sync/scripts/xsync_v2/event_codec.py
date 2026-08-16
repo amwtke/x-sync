@@ -8,18 +8,19 @@ define which events are committed.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass, fields, is_dataclass
 from datetime import datetime
 from enum import StrEnum
-import hashlib
 from itertools import pairwise
-import json
 from types import UnionType
 from typing import TypeAlias, Union, cast, get_args, get_origin, get_type_hints
 
 from .domain import (
     AgentTurnCommitted,
     AgentTurnResult,
+    AnswerTopicClarification,
     CandidatesPresented,
     CommitAgentTurn,
     CommittedDialogueEvent,
@@ -36,6 +37,7 @@ from .domain import (
     PresentCandidates,
     RecoverWork,
     ReportWorkFailure,
+    RequestTopicClarification,
     ResumeTopic,
     SelectTopic,
     SessionDeactivationPrepared,
@@ -46,13 +48,16 @@ from .domain import (
     SubmitLearnerTurn,
     SwitchTopic,
     TaskScope,
+    TopicClarification,
+    TopicClarificationAnswered,
+    TopicClarificationRequested,
     TopicContract,
     TopicPaused,
     TopicResumed,
     TopicRunState,
     TopicSelectionSubmitted,
-    TopicSwitchRequested,
     TopicStarted,
+    TopicSwitchRequested,
     TriggerBinding,
     WorkDeadLettered,
     WorkFailed,
@@ -66,7 +71,6 @@ from .work_identity import (
     is_protocol_id,
     is_sha256_digest,
 )
-
 
 SCHEMA_VERSION = 2
 PROTOCOL_VERSION = "x-sync-dialogue/2"
@@ -188,6 +192,7 @@ DOMAIN_TYPES = frozenset(
     {
         AgentTurnCommitted,
         AgentTurnResult,
+        AnswerTopicClarification,
         CandidatesPresented,
         CommittedDialogueEvent,
         CommitAgentTurn,
@@ -203,6 +208,7 @@ DOMAIN_TYPES = frozenset(
         PresentCandidates,
         RecoverWork,
         ReportWorkFailure,
+        RequestTopicClarification,
         ResumeTopic,
         SelectTopic,
         SessionDeactivationPrepared,
@@ -213,6 +219,9 @@ DOMAIN_TYPES = frozenset(
         SubmitLearnerTurn,
         SwitchTopic,
         TaskScope,
+        TopicClarification,
+        TopicClarificationAnswered,
+        TopicClarificationRequested,
         TopicContract,
         TopicPaused,
         TopicResumed,
@@ -246,6 +255,8 @@ EVENT_TYPE_BY_PAYLOAD = {
     SessionStarted: "session_started",
     CandidatesPresented: "topic_candidates_presented",
     TopicSelectionSubmitted: "topic_selection_submitted",
+    TopicClarificationRequested: "topic_clarification_requested",
+    TopicClarificationAnswered: "topic_clarification_answered",
     TopicStarted: "topic_started",
     AgentTurnCommitted: "agent_turn_committed",
     LearnerTurnSubmitted: "learner_turn_submitted",
@@ -640,6 +651,9 @@ def dialogue_request_digest(record: DialogueWriteRequestRecord) -> str:
             StartSession,
             PresentCandidates,
             SelectTopic,
+            SubmitCustomTopic,
+            RequestTopicClarification,
+            AnswerTopicClarification,
             StartTopic,
             CommitAgentTurn,
             SubmitLearnerTurn,

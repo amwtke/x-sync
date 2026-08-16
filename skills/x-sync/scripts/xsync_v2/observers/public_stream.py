@@ -7,13 +7,12 @@ stable cursor errors into their transport's response envelope.
 
 from __future__ import annotations
 
-from collections import deque
-from dataclasses import dataclass
 import math
 import threading
+from collections import deque
+from dataclasses import dataclass
 
 from ..observer import CommittedBatch, CommittedEventView, StreamKind
-
 
 _MAX_STREAM_LIMIT = 65_536
 
@@ -25,6 +24,8 @@ _PUBLIC_FIELD_ORDER: dict[str, tuple[str, ...]] = {
     "session_started": (),
     "topic_candidates_presented": ("candidates",),
     "topic_selection_submitted": ("candidate",),
+    "topic_clarification_requested": ("question_id", "question"),
+    "topic_clarification_answered": ("question_id",),
     "topic_started": (
         "topic_run_id",
         "title",

@@ -9,9 +9,9 @@ fencing.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from enum import StrEnum
-import json
 from typing import TypeAlias, cast
 
 from .domain import (
@@ -19,6 +19,7 @@ from .domain import (
     CommitAgentTurn,
     PresentCandidates,
     ReportWorkFailure,
+    RequestTopicClarification,
     StartTopic,
     TopicContract,
     TriggerKind,
@@ -34,7 +35,6 @@ from .event_codec import (
 )
 from .work import RunnableWork, WorkError, validate_runnable_work
 from .work_identity import is_protocol_id, is_sha256_digest
-
 
 MAX_HOST_RESULT_BYTES = 64 * 1024
 _MAX_TEXT_BYTES = 32 * 1024
@@ -60,6 +60,7 @@ class HostResultKind(StrEnum):
 
     TOPIC_CANDIDATES = "topic_candidates"
     TOPIC_STARTED = "topic_started"
+    TOPIC_CLARIFICATION = "topic_clarification"
     DIALOGUE_TURN = "dialogue_turn"
     WORK_FAILURE = "work_failure"
 
@@ -76,6 +77,14 @@ class TopicStartedResult:
     """One complete Topic Contract for the durable learner selection."""
 
     contract: TopicContract
+
+
+@dataclass(frozen=True, slots=True)
+class TopicClarificationResult:
+    """One bounded question needed before building the Topic Contract."""
+
+    question_id: str
+    question: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,11 +106,16 @@ class WorkFailureResult:
 HostResult: TypeAlias = (
     TopicCandidatesResult
     | TopicStartedResult
+    | TopicClarificationResult
     | DialogueTurnResult
     | WorkFailureResult
 )
 HostResultCommand: TypeAlias = (
-    PresentCandidates | StartTopic | CommitAgentTurn | ReportWorkFailure
+    PresentCandidates
+    | StartTopic
+    | RequestTopicClarification
+    | CommitAgentTurn
+    | ReportWorkFailure
 )
 
 
@@ -188,6 +202,16 @@ def decode_host_result(raw: bytes) -> HostResult:
             _keys(value, frozenset({"type", "contract"}))
             contract = decode_host_domain_value(value["contract"], TopicContract)
             return TopicStartedResult(cast(TopicContract, contract))
+        if kind is HostResultKind.TOPIC_CLARIFICATION:
+            _keys(value, frozenset({"type", "question_id", "question"}))
+            question_id = value["question_id"]
+            question = value["question"]
+            if not is_protocol_id(question_id) or type(question) is not str:
+                raise HostResultError("HOST_RESULT_SCHEMA_INVALID")
+            return TopicClarificationResult(
+                cast(str, question_id),
+                _candidate(question),
+            )
         if kind is HostResultKind.DIALOGUE_TURN:
             _keys(value, frozenset({"type", "turn"}))
             turn = decode_host_domain_value(value["turn"], AgentTurnResult)
@@ -228,6 +252,12 @@ def _tree(result: HostResult) -> dict[str, object]:
         return {
             "type": HostResultKind.TOPIC_STARTED.value,
             "contract": encode_host_domain_value(result.contract),
+        }
+    if type(result) is TopicClarificationResult:
+        return {
+            "type": HostResultKind.TOPIC_CLARIFICATION.value,
+            "question_id": result.question_id,
+            "question": result.question,
         }
     if type(result) is DialogueTurnResult:
         return {
@@ -297,6 +327,18 @@ def host_result_command(
         ):
             raise HostResultError("HOST_RESULT_WORK_MISMATCH")
         return StartTopic(command_id, result.contract, selected_candidate)
+    if type(result) is TopicClarificationResult:
+        if (
+            work.kind is not TriggerKind.TOPIC_SELECTION
+            or type(selected_candidate) is not str
+            or not selected_candidate.strip()
+        ):
+            raise HostResultError("HOST_RESULT_WORK_MISMATCH")
+        return RequestTopicClarification(
+            command_id,
+            result.question_id,
+            result.question,
+        )
     if type(result) is DialogueTurnResult:
         if work.kind not in _DIALOGUE_WORK_KINDS:
             raise HostResultError("HOST_RESULT_WORK_MISMATCH")
@@ -322,6 +364,7 @@ __all__ = [
     "HostResultError",
     "HostResultKind",
     "TopicCandidatesResult",
+    "TopicClarificationResult",
     "TopicStartedResult",
     "WorkFailureResult",
     "decode_host_result",

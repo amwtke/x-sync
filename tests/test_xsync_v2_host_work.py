@@ -4,9 +4,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import mock
 
-import tests.xsync_v2_path  # noqa: F401
-from tests.test_xsync_v2_state_machine import agent_turn, contract
 from xsync_v2.browser_service import (
+    AnswerTopicClarificationIntent,
     BrowserCommandRequest,
     BrowserCommandService,
     SelectTopicIntent,
@@ -40,6 +39,13 @@ from xsync_v2.domain import (
     WorkStatus,
 )
 from xsync_v2.event_codec import ActorKind, DialogueActor, sha256_digest
+from xsync_v2.event_store import _DialogueTransactionLog
+from xsync_v2.host_result import (
+    DialogueTurnResult,
+    TopicCandidatesResult,
+    TopicClarificationResult,
+    TopicStartedResult,
+)
 from xsync_v2.host_work import (
     HostResultPublishRequest,
     HostWorkPublishRequest,
@@ -49,12 +55,6 @@ from xsync_v2.host_work import (
     authoritative_work_snapshot,
     host_command_id,
 )
-from xsync_v2.host_result import (
-    DialogueTurnResult,
-    TopicCandidatesResult,
-    TopicStartedResult,
-)
-from xsync_v2.event_store import _DialogueTransactionLog
 from xsync_v2.lease_store import (
     ClaimRequest,
     LeaseExhaustionProof,
@@ -67,6 +67,8 @@ from xsync_v2.observer import ObserverHub, StreamKind
 from xsync_v2.secure_fs import SecureDirectory
 from xsync_v2.work import RunnableWork, derive_runnable_work
 
+import tests.xsync_v2_path  # noqa: F401
+from tests.test_xsync_v2_state_machine import agent_turn, contract
 
 HOST = DialogueActor(ActorKind.HOST, "host.test")
 LEARNER = DialogueActor(ActorKind.LEARNER, "learner.test")
@@ -158,6 +160,84 @@ class HostWorkServiceTest(unittest.TestCase):
         )
         self.assertIsNotNone(started.state.active_topic)
         self.assertIsNone(started.state.selected_candidate)
+
+    def test_topic_clarification_round_trip_creates_fresh_selection_work(self) -> None:
+        candidate_work, candidate_fence = self.bootstrap_candidates()
+        candidates = self.service.publish_result(
+            HostResultPublishRequest(
+                "clarification-candidates",
+                candidate_work,
+                TopicCandidatesResult(("支付失败边界", "补偿落点")),
+                self.config.created_at,
+                HOST,
+                candidate_fence,
+            )
+        )
+        browser = BrowserCommandService(
+            self.coordinator,
+            lambda item: EvidenceCheck(
+                EvidenceHealth.CURRENT,
+                item.evidence_digest,
+            ),
+            clock=lambda: self.config.created_at,
+        )
+        browser.execute(
+            BrowserCommandRequest(
+                "dlg-a",
+                "select-before-clarification",
+                candidates.state.conversation_version,
+                SelectTopicIntent("支付失败边界"),
+            )
+        )
+        selection_work = self.current_work()
+        selection_fence = self.claim(selection_work, "clarification")
+        requested = self.service.publish_result(
+            HostResultPublishRequest(
+                "request-clarification",
+                selection_work,
+                TopicClarificationResult(
+                    "clarification-1",
+                    "你更关心业务责任还是技术补偿?",
+                ),
+                self.config.created_at,
+                HOST,
+                selection_fence,
+            )
+        )
+        self.assertIs(
+            ConversationPhase.CLARIFYING_TOPIC,
+            requested.state.phase,
+        )
+        self.assertIsNone(requested.state.session_work)
+
+        answered = browser.execute(
+            BrowserCommandRequest(
+                "dlg-a",
+                "answer-clarification",
+                requested.state.conversation_version,
+                AnswerTopicClarificationIntent(
+                    "clarification-1",
+                    "先厘清业务责任, 再映射技术补偿。",
+                ),
+            )
+        )
+        self.assertIs(ConversationPhase.WAITING_HOST, answered.state.phase)
+        clarified_work = self.current_work()
+        self.assertNotEqual(selection_work.work_id, clarified_work.work_id)
+        clarified_fence = self.claim(clarified_work, "clarified-topic")
+
+        started = self.service.publish_result(
+            HostResultPublishRequest(
+                "start-after-clarification",
+                clarified_work,
+                TopicStartedResult(contract()),
+                self.config.created_at,
+                HOST,
+                clarified_fence,
+            )
+        )
+        self.assertIsNone(started.state.topic_clarification)
+        self.assertIsNotNone(started.state.active_topic)
 
     def setUp(self) -> None:
         self.temporary = TemporaryDirectory()

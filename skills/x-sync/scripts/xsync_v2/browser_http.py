@@ -7,13 +7,14 @@ inside ``BrowserCommandService`` and the canonical coordinator.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import hmac
 import json
 import re
+from dataclasses import dataclass
 from urllib.parse import parse_qs, urlsplit
 
 from .browser_service import (
+    AnswerTopicClarificationIntent,
     BrowserCommandRequest,
     BrowserCommandService,
     BrowserIntent,
@@ -37,7 +38,6 @@ from .observers.public_stream import (
     PublicStreamObserver,
     PublicStreamSubscription,
 )
-
 
 MAX_HTTP_BODY_BYTES = 128 * 1024
 _IF_MATCH = re.compile(r'"conversation-v(0|[1-9][0-9]*)"\Z')
@@ -226,6 +226,8 @@ def _allowed_actions(state: DialogueState) -> tuple[str, ...]:
     if state.phase is ConversationPhase.CHOOSING_TOPIC:
         actions.add("custom_topic")
         actions.add("select")
+    if state.phase is ConversationPhase.CLARIFYING_TOPIC:
+        actions.add("answer_clarification")
     if state.phase is ConversationPhase.NONE and state.paused_topics:
         actions.add("resume")
     if state.phase is ConversationPhase.RECOVERABLE_ERROR:
@@ -266,6 +268,15 @@ def _public_state(state: DialogueState) -> dict[str, object]:
         "phase": state.phase.value,
         "candidates": list(state.candidates),
         "selected_candidate": state.selected_candidate,
+        "topic_clarification": (
+            None
+            if state.topic_clarification is None
+            else {
+                "question_id": state.topic_clarification.question_id,
+                "question": state.topic_clarification.question,
+                "answered": state.topic_clarification.answer is not None,
+            }
+        ),
         "topic": topic_view,
         "paused_topics": [
             {
@@ -553,6 +564,16 @@ class BrowserApi:
             if type(topic) is not str:
                 raise BrowserApiError("VALIDATION_FAILED")
             return CustomTopicIntent(topic)
+        if action == "answer_clarification" and set(body) == {
+            "action",
+            "question_id",
+            "answer",
+        }:
+            question_id = body["question_id"]
+            answer = body["answer"]
+            if type(question_id) is not str or type(answer) is not str:
+                raise BrowserApiError("VALIDATION_FAILED")
+            return AnswerTopicClarificationIntent(question_id, answer)
         if action == "pause" and set(body) == {"action"}:
             return PauseTopicIntent()
         if action == "switch" and set(body) == {"action"}:

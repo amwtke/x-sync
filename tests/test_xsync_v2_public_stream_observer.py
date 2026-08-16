@@ -1,10 +1,8 @@
 # ruff: noqa: RUF001
 
+import threading
 import unittest
 from dataclasses import FrozenInstanceError
-import threading
-
-import tests.xsync_v2_path  # noqa: F401
 
 from xsync_v2.observer import (
     CommittedBatch,
@@ -17,6 +15,8 @@ from xsync_v2.observers.public_stream import (
     PublicStreamEvent,
     PublicStreamObserver,
 )
+
+import tests.xsync_v2_path  # noqa: F401
 
 
 def event(
@@ -174,6 +174,51 @@ class PublicStreamObserverTest(unittest.TestCase):
         self.assertEqual("topic_selection_submitted", projected.event_type)
         self.assertEqual((("candidate", "Outbox"),), projected.fields)
         self.assertNotIn("work-secret", repr(projected))
+
+    def test_topic_clarification_exposes_question_but_never_answer(self) -> None:
+        observer = PublicStreamObserver(
+            retention_limit=8,
+            subscriber_queue_limit=8,
+        )
+        subscription = observer.subscribe("session-1", after_sequence=0)
+        observer.on_batch(
+            batch(
+                event(
+                    "event-clarify",
+                    1,
+                    tag="topic_clarification_requested",
+                    fields=(
+                        ("question_id", "clarification-1"),
+                        ("question", "你更关心哪个边界？"),
+                        ("work_id", "work-secret"),
+                    ),
+                ),
+                event(
+                    "event-answer",
+                    2,
+                    tag="topic_clarification_answered",
+                    fields=(
+                        ("question_id", "clarification-1"),
+                        ("answer", "answer-secret"),
+                        ("evidence_digest", "sha256:secret"),
+                    ),
+                ),
+            )
+        )
+
+        requested, answered = subscription.read_available()
+        self.assertEqual(
+            (
+                ("question_id", "clarification-1"),
+                ("question", "你更关心哪个边界？"),
+            ),
+            requested.fields,
+        )
+        self.assertEqual(
+            (("question_id", "clarification-1"),),
+            answered.fields,
+        )
+        self.assertNotIn("answer-secret", repr((requested, answered)))
 
     def test_failure_lifecycle_is_contiguous_and_fail_closed(self) -> None:
         observer = PublicStreamObserver(

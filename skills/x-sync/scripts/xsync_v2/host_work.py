@@ -8,8 +8,8 @@ evidence plus lease guard immediately before marker publication.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
 import re
+from dataclasses import dataclass, replace
 from typing import TypeAlias
 
 from .coordinator import (
@@ -32,12 +32,14 @@ from .domain import (
     PresentCandidates,
     Rejected,
     ReportWorkFailure,
+    RequestTopicClarification,
     SessionStarted,
     StartTopic,
+    TopicClarificationAnswered,
     TopicResumed,
     TopicSelectionSubmitted,
-    TopicSwitchRequested,
     TopicStarted,
+    TopicSwitchRequested,
     TriggerBinding,
     TriggerKind,
     WorkFailure,
@@ -68,6 +70,7 @@ from .host_result import (
     HostResult,
     HostResultError,
     TopicCandidatesResult,
+    TopicClarificationResult,
     TopicStartedResult,
     WorkFailureResult,
     encode_host_result,
@@ -108,15 +111,19 @@ from .work import (
     validate_runnable_work,
 )
 
-
 _ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
 
 HostWorkCommand: TypeAlias = (
-    PresentCandidates | StartTopic | CommitAgentTurn | ReportWorkFailure
+    PresentCandidates
+    | StartTopic
+    | RequestTopicClarification
+    | CommitAgentTurn
+    | ReportWorkFailure
 )
 _HOST_RESULT_TYPES = frozenset(
     {
         TopicCandidatesResult,
+        TopicClarificationResult,
         TopicStartedResult,
         DialogueTurnResult,
         WorkFailureResult,
@@ -205,6 +212,8 @@ def _created_trigger(event: CommittedDialogueEvent) -> TriggerBinding | None:
     if type(payload) is SessionStarted:
         return payload.candidate_trigger
     if type(payload) is TopicSelectionSubmitted:
+        return payload.next_trigger
+    if type(payload) is TopicClarificationAnswered:
         return payload.next_trigger
     if type(payload) is TopicSwitchRequested:
         return payload.candidate_trigger
@@ -562,6 +571,7 @@ class HostWorkService:
             not in {
                 PresentCandidates,
                 StartTopic,
+                RequestTopicClarification,
                 CommitAgentTurn,
                 ReportWorkFailure,
             }

@@ -9,8 +9,8 @@ from .domain import (
     EvidenceHealth,
     GateAssessment,
     GateStatus,
-    LearnerTurnSubmitted,
     LearnerModelEntry,
+    LearnerTurnSubmitted,
     Lens,
     TopicContract,
     TriggerKind,
@@ -27,7 +27,6 @@ from .lease_store import LeaseRecord
 from .locking import SessionLockAuthority
 from .registry import DialogueRegistrationStatus
 from .work import RunnableWork, derive_runnable_work
-
 
 _PUBLISHABLE_EVIDENCE = frozenset(
     {EvidenceHealth.CURRENT, EvidenceHealth.CAPTURED_DIRTY}
@@ -198,6 +197,14 @@ class RepositoryHostContextProvider:
                     "Build a repository-grounded Topic Contract for the "
                     f"selected candidate: {state.selected_candidate}"
                 )
+                clarification = state.topic_clarification
+                if clarification is not None and clarification.answer is not None:
+                    priority_gap += (
+                        "\nLearner clarification question: "
+                        f"{clarification.question}"
+                        "\nLearner clarification answer: "
+                        f"{clarification.answer}"
+                    )
         else:
             active_contract = topic.contract
             task_scope = active_contract.task_scope.summary

@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import replace
 import json
 import unittest
+from dataclasses import replace
 
-import tests.xsync_v2_path  # noqa: F401
-from tests.test_xsync_v2_state_machine import agent_turn, contract
 from xsync_v2.domain import (
     CommittedDialogueEvent,
     DecisionContext,
@@ -13,6 +11,8 @@ from xsync_v2.domain import (
     EvidenceHealth,
     PresentCandidates,
     ReportWorkFailure,
+    RequestTopicClarification,
+    SelectTopic,
     SessionStarted,
     StartSession,
     TriggerBinding,
@@ -22,10 +22,11 @@ from xsync_v2.domain import (
 )
 from xsync_v2.event_codec import sha256_digest
 from xsync_v2.host_result import (
+    MAX_HOST_RESULT_BYTES,
     DialogueTurnResult,
     HostResultError,
-    MAX_HOST_RESULT_BYTES,
     TopicCandidatesResult,
+    TopicClarificationResult,
     TopicStartedResult,
     WorkFailureResult,
     decode_host_result,
@@ -34,6 +35,9 @@ from xsync_v2.host_result import (
 )
 from xsync_v2.state_machine import Accepted, decide, reduce
 from xsync_v2.work import WorkOrigin, derive_runnable_work
+
+import tests.xsync_v2_path  # noqa: F401
+from tests.test_xsync_v2_state_machine import agent_turn, contract
 
 
 def digest(label: str) -> str:
@@ -73,10 +77,99 @@ def candidate_work():
     return projected
 
 
+def selection_work():
+    state = initial_dialogue_state("session-selection", 1)
+    candidate_trigger = TriggerBinding(
+        TriggerKind.TOPIC_CANDIDATES,
+        "candidate-token",
+        "runtime-1",
+        None,
+        None,
+        digest("candidate-input"),
+        digest("evidence"),
+    )
+    started = decide(
+        state,
+        StartSession("start-selection"),
+        DecisionContext(
+            1,
+            candidate_trigger,
+            EvidenceCheck(EvidenceHealth.CURRENT, digest("evidence")),
+        ),
+    )
+    assert isinstance(started, Accepted)
+    start_event = CommittedDialogueEvent(
+        "event-selection-1",
+        1,
+        0,
+        1,
+        "start-selection",
+        started.events[0].payload,
+    )
+    state = reduce(state, start_event)
+    candidates = decide(
+        state,
+        PresentCandidates("present-selection", ("Registry fencing",)),
+        DecisionContext(
+            1,
+            candidate_trigger,
+            EvidenceCheck(EvidenceHealth.CURRENT, digest("evidence")),
+        ),
+    )
+    assert isinstance(candidates, Accepted)
+    candidates_event = CommittedDialogueEvent(
+        "event-selection-2",
+        2,
+        1,
+        2,
+        "present-selection",
+        candidates.events[0].payload,
+    )
+    state = reduce(state, candidates_event)
+    selection_trigger = TriggerBinding(
+        TriggerKind.TOPIC_SELECTION,
+        "selection-token",
+        "runtime-1",
+        None,
+        None,
+        digest("selection-input"),
+        digest("evidence"),
+    )
+    selected = decide(
+        state,
+        SelectTopic("select-topic", "Registry fencing"),
+        DecisionContext(
+            1,
+            selection_trigger,
+            EvidenceCheck(EvidenceHealth.CURRENT, digest("evidence")),
+        ),
+    )
+    assert isinstance(selected, Accepted)
+    selected_event = CommittedDialogueEvent(
+        "event-selection-3",
+        3,
+        2,
+        3,
+        "select-topic",
+        selected.events[0].payload,
+    )
+    state = reduce(state, selected_event)
+    projected = derive_runnable_work(
+        state,
+        WorkOrigin(selected_event.event_id, selected_event.sequence, selection_trigger),
+    )
+    assert projected is not None
+    return projected
+
+
 class HostResultCodecTest(unittest.TestCase):
     def test_round_trips_each_closed_result_without_host_specific_fields(self) -> None:
         values = (
             TopicCandidatesResult(("Registry fencing", "Lease recovery")),
+            TopicClarificationResult(
+                "clarification-1",
+                "Which boundary should we examine first?",
+            ),
             TopicStartedResult(contract()),
             DialogueTurnResult(agent_turn()),
             WorkFailureResult(
@@ -141,6 +234,19 @@ class HostResultCodecTest(unittest.TestCase):
 
         self.assertIs(type(command), PresentCandidates)
         self.assertEqual(("Registry fencing",), command.candidates)
+
+        clarification = host_result_command(
+            TopicClarificationResult(
+                "clarification-1",
+                "Which boundary should we examine first?",
+            ),
+            idempotency_key="clarify-1",
+            work=selection_work(),
+            selected_candidate="Registry fencing",
+        )
+        self.assertIs(type(clarification), RequestTopicClarification)
+        assert isinstance(clarification, RequestTopicClarification)
+        self.assertEqual("clarification-1", clarification.question_id)
 
     def test_rejects_result_for_the_wrong_durable_work_kind(self) -> None:
         work = candidate_work()

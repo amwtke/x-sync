@@ -241,6 +241,15 @@ class AgentTurnResult:
 
 
 @dataclass(frozen=True, slots=True)
+class TopicClarification:
+    """One visible Host clarification and its optional learner answer."""
+
+    question_id: str
+    question: str
+    answer: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class TopicRunState:
     topic_run_id: str
     contract: TopicContract
@@ -283,6 +292,7 @@ class DialogueState:
     active_topic: TopicRunState | None
     paused_topics: tuple[TopicRunState, ...]
     selected_candidate: str | None = None
+    topic_clarification: TopicClarification | None = None
 
     @property
     def session_unresolved_trigger(self) -> TriggerBinding | None:
@@ -317,6 +327,24 @@ class SubmitCustomTopic:
 
     command_id: str
     topic: str
+
+
+@dataclass(frozen=True, slots=True)
+class RequestTopicClarification:
+    """Publish one Host clarification for the selected topic."""
+
+    command_id: str
+    question_id: str
+    question: str
+
+
+@dataclass(frozen=True, slots=True)
+class AnswerTopicClarification:
+    """Answer the current topic clarification and requeue contract work."""
+
+    command_id: str
+    question_id: str
+    answer: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -394,6 +422,8 @@ DialogueCommand: TypeAlias = (
     | PresentCandidates
     | SelectTopic
     | SubmitCustomTopic
+    | RequestTopicClarification
+    | AnswerTopicClarification
     | StartTopic
     | CommitAgentTurn
     | SubmitLearnerTurn
@@ -421,6 +451,24 @@ class TopicSelectionSubmitted:
     """Learner selection which creates contract-building Host work."""
 
     candidate: str
+    next_trigger: TriggerBinding
+
+
+@dataclass(frozen=True, slots=True)
+class TopicClarificationRequested:
+    """Host question which completes the current contract-building work."""
+
+    question_id: str
+    question: str
+    selection_trigger: TriggerBinding
+
+
+@dataclass(frozen=True, slots=True)
+class TopicClarificationAnswered:
+    """Learner answer which creates fresh contract-building work."""
+
+    question_id: str
+    answer: str
     next_trigger: TriggerBinding
 
 
@@ -526,6 +574,8 @@ DialogueEventPayload: TypeAlias = (
     SessionStarted
     | CandidatesPresented
     | TopicSelectionSubmitted
+    | TopicClarificationRequested
+    | TopicClarificationAnswered
     | TopicStarted
     | AgentTurnCommitted
     | LearnerTurnSubmitted

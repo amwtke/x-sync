@@ -7,11 +7,11 @@ copy state-machine guards or manufacture evidence claims.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import datetime
-import hashlib
-import json
 from typing import Protocol, TypeAlias, cast
 
 from .coordinator import (
@@ -21,6 +21,7 @@ from .coordinator import (
     DialogueSessionConfig,
 )
 from .domain import (
+    AnswerTopicClarification,
     CurrentWorkState,
     DecisionContext,
     DialogueCommand,
@@ -42,7 +43,6 @@ from .domain import (
 from .event_codec import ActorKind, DialogueActor
 from .event_store import DialogueCommitOutcome
 from .work_identity import is_protocol_id, is_sha256_digest
-
 
 _MAX_TEXT_BYTES = 32 * 1024
 _PUBLISHABLE_EVIDENCE = frozenset(
@@ -93,6 +93,14 @@ class CustomTopicIntent:
 
 
 @dataclass(frozen=True, slots=True)
+class AnswerTopicClarificationIntent:
+    """Learner answer to the current Host topic clarification."""
+
+    question_id: str
+    answer: str
+
+
+@dataclass(frozen=True, slots=True)
 class PauseTopicIntent:
     """Learner request to pause the current Topic Run."""
 
@@ -121,6 +129,7 @@ BrowserIntent: TypeAlias = (
     SubmitTurnIntent
     | SelectTopicIntent
     | CustomTopicIntent
+    | AnswerTopicClarificationIntent
     | PauseTopicIntent
     | SwitchTopicIntent
     | ResumeTopicIntent
@@ -294,6 +303,7 @@ class BrowserCommandService:
                 SubmitTurnIntent,
                 SelectTopicIntent,
                 CustomTopicIntent,
+                AnswerTopicClarificationIntent,
                 PauseTopicIntent,
                 SwitchTopicIntent,
                 ResumeTopicIntent,
@@ -309,6 +319,8 @@ class BrowserCommandService:
             valid = _valid_text(intent.candidate)
         elif type(intent) is CustomTopicIntent:
             valid = _valid_text(intent.topic)
+        elif type(intent) is AnswerTopicClarificationIntent:
+            valid = is_protocol_id(intent.question_id) and _valid_text(intent.answer)
         elif type(intent) is ResumeTopicIntent:
             valid = is_protocol_id(intent.topic_run_id)
         elif type(intent) is RecoverWorkIntent:
@@ -363,6 +375,12 @@ class BrowserCommandService:
             return SelectTopic(command_id, intent.candidate)
         if type(intent) is CustomTopicIntent:
             return SubmitCustomTopic(command_id, intent.topic)
+        if type(intent) is AnswerTopicClarificationIntent:
+            return AnswerTopicClarification(
+                command_id,
+                intent.question_id,
+                intent.answer,
+            )
         if type(intent) is PauseTopicIntent:
             return PauseTopic(command_id)
         if type(intent) is SwitchTopicIntent:
@@ -397,6 +415,12 @@ class BrowserCommandService:
             intent_tree = {
                 "type": "custom_topic",
                 "topic": intent.topic,
+            }
+        elif type(intent) is AnswerTopicClarificationIntent:
+            intent_tree = {
+                "type": "answer_topic_clarification",
+                "question_id": intent.question_id,
+                "answer": intent.answer,
             }
         elif type(intent) is PauseTopicIntent:
             intent_tree = {"type": "pause_topic"}
@@ -440,12 +464,20 @@ class BrowserCommandService:
                 input_digest,
                 evidence.evidence_digest,
             )
-        elif type(intent) in {SelectTopicIntent, CustomTopicIntent}:
+        elif type(intent) in {
+            SelectTopicIntent,
+            CustomTopicIntent,
+            AnswerTopicClarificationIntent,
+        }:
             trigger = TriggerBinding(
                 TriggerKind.TOPIC_SELECTION,
                 work_id,
                 config.runtime_epoch,
-                None,
+                (
+                    intent.question_id
+                    if type(intent) is AnswerTopicClarificationIntent
+                    else None
+                ),
                 None,
                 input_digest,
                 evidence.evidence_digest,
@@ -528,6 +560,7 @@ class BrowserCommandService:
 
 
 __all__ = [
+    "AnswerTopicClarificationIntent",
     "BrowserCommandRequest",
     "BrowserCommandService",
     "BrowserIntent",

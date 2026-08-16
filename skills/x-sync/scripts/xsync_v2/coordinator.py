@@ -9,12 +9,12 @@ so a different process can finish a handoff abandoned by its predecessor.
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from dataclasses import dataclass
-from datetime import datetime
 import json
 import re
 import threading
+from collections.abc import Callable
+from dataclasses import dataclass
+from datetime import datetime
 from typing import cast
 
 from .dispatch import (
@@ -35,25 +35,26 @@ from .domain import (
     FencedQuiesceContext,
     PauseCause,
     PendingDialogueEvent,
-    PresentCandidates,
     PrepareSessionDeactivation,
+    PresentCandidates,
     Rejected,
     ReportWorkFailure,
-    SessionLifecycle,
+    RequestTopicClarification,
     SessionDeactivationPrepared,
+    SessionLifecycle,
     StartSession,
     StartTopic,
+    TopicPaused,
     TriggerBinding,
     TriggerKind,
-    TopicPaused,
     initial_dialogue_state,
 )
 from .event_codec import (
+    PROTOCOL_VERSION,
+    SCHEMA_VERSION,
     ActorKind,
     DialogueActor,
     DialogueWriteRequestRecord,
-    PROTOCOL_VERSION,
-    SCHEMA_VERSION,
     canonical_json_bytes,
     dialogue_request_digest,
     dialogue_state_digest,
@@ -76,8 +77,8 @@ from .locking import (
     SessionLockAuthority,
 )
 from .registry import (
-    ActivateTarget,
     Activated,
+    ActivateTarget,
     BeginHandoff,
     CommittedRegistryEvent,
     CompleteHandoff,
@@ -92,8 +93,10 @@ from .registry import (
     RegistryIdempotent,
     RegistryRejected,
     RegistryState,
-    decide as decide_registry,
     initial_registry_state,
+)
+from .registry import (
+    decide as decide_registry,
 )
 from .registry_store import (
     RegistryCommitOutcome,
@@ -944,6 +947,7 @@ class DialogueCoordinator:
         if type(request.command) in {
             PresentCandidates,
             StartTopic,
+            RequestTopicClarification,
             CommitAgentTurn,
             ReportWorkFailure,
         }:

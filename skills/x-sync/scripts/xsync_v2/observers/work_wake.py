@@ -2,18 +2,18 @@
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass
-import threading
 from typing import Protocol
 
 from ..observer import CommittedBatch, StreamKind
-
 
 _WORK_TRIGGER_EVENT_TYPES = frozenset(
     {
         "session_started",
         "topic_selection_submitted",
+        "topic_clarification_answered",
         "topic_started",
         "learner_turn_submitted",
         "topic_resumed",

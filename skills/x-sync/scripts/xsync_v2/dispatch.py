@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import json
 import threading
+from dataclasses import dataclass
 from typing import TypeAlias, cast
 
 from .domain import (
@@ -14,11 +14,13 @@ from .domain import (
     LearnerTurnSubmitted,
     SessionDeactivationPrepared,
     SessionStarted,
+    TopicClarificationAnswered,
+    TopicClarificationRequested,
     TopicPaused,
     TopicResumed,
     TopicSelectionSubmitted,
-    TopicSwitchRequested,
     TopicStarted,
+    TopicSwitchRequested,
     WorkDeadLettered,
     WorkFailed,
     WorkRecoveryRequested,
@@ -181,6 +183,19 @@ def _dialogue_payload_view(event: CommittedDialogueEvent) -> ImmutablePayloadVie
         return ImmutablePayloadView(
             "topic_selection_submitted",
             _fields(("candidate", payload.candidate)),
+        )
+    if type(payload) is TopicClarificationRequested:
+        return ImmutablePayloadView(
+            "topic_clarification_requested",
+            _fields(
+                ("question_id", payload.question_id),
+                ("question", payload.question),
+            ),
+        )
+    if type(payload) is TopicClarificationAnswered:
+        return ImmutablePayloadView(
+            "topic_clarification_answered",
+            _fields(("question_id", payload.question_id)),
         )
     if type(payload) is TopicStarted:
         contract = payload.contract

@@ -9,6 +9,13 @@ import tests.xsync_v2_path  # noqa: F401
 
 # isort: split
 from xsync_v2 import event_store, registry_store
+from xsync_v2.bootstrap import (
+    DialogueBootstrapError,
+    DialogueBootstrapManifest,
+    bootstrap_config,
+    decode_bootstrap_manifest,
+    read_bootstrap_manifest,
+)
 from xsync_v2.browser_http import (
     BrowserApi,
     BrowserHttpRequest,
@@ -17,6 +24,7 @@ from xsync_v2.browser_http import (
 )
 from xsync_v2.browser_server import BrowserServerAddress, LoopbackBrowserServer
 from xsync_v2.browser_service import (
+    AnswerTopicClarificationIntent,
     BrowserCommandRequest,
     BrowserCommandService,
     CustomTopicIntent,
@@ -26,13 +34,6 @@ from xsync_v2.browser_service import (
     SelectTopicIntent,
     SubmitTurnIntent,
     SwitchTopicIntent,
-)
-from xsync_v2.bootstrap import (
-    DialogueBootstrapError,
-    DialogueBootstrapManifest,
-    bootstrap_config,
-    decode_bootstrap_manifest,
-    read_bootstrap_manifest,
 )
 from xsync_v2.coordinator import (
     DialogueCoordinator,
@@ -85,6 +86,7 @@ from xsync_v2.host_result import (
     HostResultError,
     HostResultKind,
     TopicCandidatesResult,
+    TopicClarificationResult,
     TopicStartedResult,
     WorkFailureResult,
     decode_host_result,
@@ -322,6 +324,7 @@ class ArchitectureTest(unittest.TestCase):
             HostResultError,
             HostResultKind,
             TopicCandidatesResult,
+            TopicClarificationResult,
             TopicStartedResult,
             DialogueTurnResult,
             WorkFailureResult,
@@ -347,6 +350,7 @@ class ArchitectureTest(unittest.TestCase):
             SubmitTurnIntent,
             SelectTopicIntent,
             CustomTopicIntent,
+            AnswerTopicClarificationIntent,
             PauseTopicIntent,
             SwitchTopicIntent,
             ResumeTopicIntent,

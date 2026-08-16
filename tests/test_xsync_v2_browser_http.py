@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 import json
+import unittest
 from dataclasses import replace
 from types import SimpleNamespace
-import unittest
-
-import tests.xsync_v2_path  # noqa: F401
 
 from xsync_v2.browser_http import (
     BrowserApi,
@@ -25,6 +23,7 @@ from xsync_v2.browser_service import (
 from xsync_v2.coordinator import CoordinatorError, DialogueSessionConfig
 from xsync_v2.domain import (
     AgentTurnResult,
+    AnswerTopicClarification,
     ConversationPhase,
     CurrentWorkState,
     DialogueState,
@@ -39,10 +38,11 @@ from xsync_v2.domain import (
     ResumeTopic,
     SelectTopic,
     SessionLifecycle,
-    SubmitLearnerTurn,
     SubmitCustomTopic,
+    SubmitLearnerTurn,
     SwitchTopic,
     TaskScope,
+    TopicClarification,
     TopicContract,
     TopicLifecycle,
     TopicRunState,
@@ -61,6 +61,8 @@ from xsync_v2.observers.public_stream import (
     PublicStreamError,
     PublicStreamObserver,
 )
+
+import tests.xsync_v2_path  # noqa: F401
 
 
 def digest(label: str) -> str:
@@ -370,6 +372,64 @@ class BrowserHttpTest(unittest.TestCase):
         self.assertIs(
             TriggerKind.TOPIC_SELECTION,
             custom_request.context.trigger.kind,
+        )
+
+    def test_topic_clarification_answer_is_typed_and_not_projected(self) -> None:
+        clarification = TopicClarification(
+            "clarification-1",
+            "你更关心业务责任还是技术补偿?",
+        )
+        self.coordinator.state = replace(
+            state(),
+            phase=ConversationPhase.CLARIFYING_TOPIC,
+            active_topic=None,
+            candidates=(),
+            selected_candidate="结算失败后的人工处置",
+            topic_clarification=clarification,
+        )
+        projected = self.api.handle(request("GET", "/api/v2/state"))
+        public = json.loads(projected.body)
+        self.assertEqual(["answer_clarification"], public["allowed_actions"])
+        self.assertEqual(
+            {
+                "question_id": "clarification-1",
+                "question": "你更关心业务责任还是技术补偿?",
+                "answered": False,
+            },
+            public["topic_clarification"],
+        )
+
+        response = self.api.handle(
+            request(
+                "POST",
+                "/api/v2/topic",
+                body={
+                    "action": "answer_clarification",
+                    "question_id": "clarification-1",
+                    "answer": "先厘清业务责任, 再映射技术补偿。",
+                },
+                headers=(
+                    ("Content-Type", "application/json"),
+                    ("Idempotency-Key", "clarification-answer-key"),
+                    ("If-Match", '"conversation-v5"'),
+                ),
+            )
+        )
+        self.assertEqual(200, response.status)
+        execution = self.coordinator.requests[-1]
+        self.assertIs(type(execution.command), AnswerTopicClarification)
+        self.assertEqual("clarification-1", execution.command.question_id)
+        self.assertEqual(
+            "先厘清业务责任, 再映射技术补偿。",
+            execution.command.answer,
+        )
+        self.assertEqual(
+            "clarification-1",
+            execution.context.trigger.parent_turn_id,
+        )
+        self.assertNotIn(
+            "先厘清业务责任",
+            projected.body.decode(),
         )
 
     def test_stream_is_authenticated_cursor_resumable_and_safe(self) -> None:
