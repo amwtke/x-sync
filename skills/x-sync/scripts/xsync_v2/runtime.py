@@ -22,6 +22,7 @@ from .coordinator import (
     EvidenceVerifier,
 )
 from .dispatch import AfterCommitDispatcher, AfterCommitReport
+from .evidence import SessionEvidenceStore
 from .host_control import HostContextProvider, HostControl, MonotonicClock
 from .host_work import HostWorkService, authoritative_work_snapshot
 from .lease_store import (
@@ -33,6 +34,7 @@ from .locking import DomainLockManager
 from .observer import ObserverHub
 from .observers.public_stream import PublicStreamObserver
 from .observers.work_wake import WorkWakeHint, WorkWakeObserver
+from .repository_context import RepositoryHostContextProvider
 from .secure_fs import SecureDirectory
 
 
@@ -94,8 +96,10 @@ class DialogueRuntime:
         registry_id: str,
         runtime_epoch: str,
         *,
-        evidence_verifier: EvidenceVerifier,
-        context_provider: HostContextProvider,
+        evidence_verifier: EvidenceVerifier | None = None,
+        context_provider: HostContextProvider | None = None,
+        repository_directory: str | os.PathLike[str] | None = None,
+        repository_id: str | None = None,
         runtime_authority_verifier: RuntimeAuthorityVerifier,
         lease_clock: LeaseClock,
         browser_clock: BrowserClock,
@@ -105,13 +109,38 @@ class DialogueRuntime:
         subscriber_queue_limit: int = 64,
     ) -> None:
         path = _state_path(state_directory)
+        repository_mode = repository_directory is not None or repository_id is not None
+        if repository_mode:
+            if (
+                repository_directory is None
+                or repository_id is None
+                or evidence_verifier is not None
+                or context_provider is not None
+            ):
+                raise DialogueRuntimeError("INVALID_RUNTIME_CONFIGURATION")
+        elif evidence_verifier is None or context_provider is None:
+            raise DialogueRuntimeError("INVALID_RUNTIME_CONFIGURATION")
         root: SecureDirectory | None = None
         dialogues: SecureDirectory | None = None
         locks: DomainLockManager | None = None
+        evidence_store: SessionEvidenceStore | None = None
         try:
             root = SecureDirectory.open(path)
             dialogues = root.ensure_directory("dialogues")
             locks = DomainLockManager(path / "locks")
+            if repository_mode:
+                assert repository_directory is not None
+                assert repository_id is not None
+                evidence_store = SessionEvidenceStore(
+                    repository_directory,
+                    repository_id,
+                    dialogues,
+                    locks,
+                )
+                active_evidence_verifier: EvidenceVerifier = evidence_store.verify
+            else:
+                assert evidence_verifier is not None
+                active_evidence_verifier = evidence_verifier
 
             public_stream = PublicStreamObserver(
                 retention_limit=stream_retention_limit,
@@ -128,7 +157,7 @@ class DialogueRuntime:
                 dialogues,
                 locks,
                 registry_id,
-                evidence_verifier=evidence_verifier,
+                evidence_verifier=active_evidence_verifier,
                 after_commit_dispatcher=dispatcher,
             )
             leases = LeaseStore(
@@ -146,22 +175,31 @@ class DialogueRuntime:
                 runtime_authority_verifier=runtime_authority_verifier,
             )
             work_service = HostWorkService(coordinator, leases)
+            if evidence_store is not None:
+                active_context_provider: HostContextProvider = (
+                    RepositoryHostContextProvider(coordinator, evidence_store)
+                )
+            else:
+                assert context_provider is not None
+                active_context_provider = context_provider
             host_control = HostControl(
                 coordinator,
                 locks,
                 leases,
                 work_service,
-                context_provider,
+                active_context_provider,
                 monotonic_clock=monotonic_clock,
                 durable_poll_interval=durable_poll_interval,
             )
             wake_relay.bind(host_control)
             browser_commands = BrowserCommandService(
                 coordinator,
-                evidence_verifier,
+                active_evidence_verifier,
                 clock=browser_clock,
             )
         except BaseException:
+            if evidence_store is not None:
+                evidence_store.close()
             if locks is not None:
                 locks.close()
             if dialogues is not None:
@@ -180,6 +218,7 @@ class DialogueRuntime:
         self._browser_commands = browser_commands
         self._public_stream = public_stream
         self._dispatcher = dispatcher
+        self._evidence_store = evidence_store
         self._browser_server: LoopbackBrowserServer | None = None
         self._lifecycle_lock = threading.Lock()
         self._closed = False
@@ -206,6 +245,14 @@ class DialogueRuntime:
         """Return the bounded Browser-safe after-commit projection."""
         self._require_open()
         return self._public_stream
+
+    @property
+    def evidence(self) -> SessionEvidenceStore:
+        """Return the Session evidence store in repository-backed mode."""
+        self._require_open()
+        if self._evidence_store is None:
+            raise DialogueRuntimeError("EVIDENCE_STORE_NOT_CONFIGURED")
+        return self._evidence_store
 
     def resolve(self, config: DialogueSessionConfig) -> DialogueResolution:
         """Resolve or hand off through the canonical Registry coordinator."""
@@ -276,6 +323,8 @@ class DialogueRuntime:
                 server.close()
             except BaseException as exc:
                 error = exc
+        if self._evidence_store is not None:
+            self._evidence_store.close()
         try:
             self._locks.close()
         except BaseException as exc:

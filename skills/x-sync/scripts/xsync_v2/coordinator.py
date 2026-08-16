@@ -616,6 +616,7 @@ class DialogueCoordinator:
                     state = registry_log.tip().state
                     current_id = state.current_session_id
                     if current_id is None:
+                        self._require_publishable_evidence(config)
                         self._prepare_empty_target(
                             config,
                             state.generation + 1,
@@ -676,6 +677,7 @@ class DialogueCoordinator:
                         source_id,
                         source.config_digest,
                     )
+                    self._require_publishable_evidence(config)
                     self._bootstrap_current(
                         state,
                         source_config,
@@ -1686,6 +1688,18 @@ class DialogueCoordinator:
             )
         ):
             raise CoordinatorError("EVIDENCE_VERIFICATION_FAILED")
+        return check
+
+    def _require_publishable_evidence(
+        self,
+        config: DialogueSessionConfig,
+    ) -> EvidenceCheck:
+        check = self._verify_evidence(config)
+        if check.health not in {
+            EvidenceHealth.CURRENT,
+            EvidenceHealth.CAPTURED_DIRTY,
+        }:
+            raise CoordinatorError("EVIDENCE_NOT_PUBLISHABLE")
         return check
 
     def _commit_dialogue_events(

@@ -36,6 +36,17 @@ from xsync_v2.dispatch import (
     registry_batch,
 )
 from xsync_v2.domain import DialogueCommand
+from xsync_v2.evidence import (
+    EvidenceClaimType,
+    EvidenceKind,
+    EvidenceSnapshot,
+    EvidenceSource,
+    EvidenceStoreError,
+    FrozenEvidenceEntry,
+    SessionEvidenceStore,
+    decode_evidence_snapshot,
+    encode_evidence_snapshot,
+)
 from xsync_v2.host_context import (
     EvidenceContextClaim,
     HostContextCapsule,
@@ -75,6 +86,7 @@ from xsync_v2.observers.public_stream import (
 )
 from xsync_v2.observers.work_wake import WorkWakeObserver
 from xsync_v2.runtime import DialogueRuntime, DialogueRuntimeError
+from xsync_v2.repository_context import RepositoryHostContextProvider
 from xsync_v2.state_machine import TRANSITION_TABLE, decide, reduce
 from xsync_v2.work import derive_runnable_work
 
@@ -259,11 +271,28 @@ class ArchitectureTest(unittest.TestCase):
             PublicStreamSubscription.close,
             WorkWakeObserver,
             WorkWakeObserver.on_batch,
+            EvidenceStoreError,
+            EvidenceKind,
+            EvidenceClaimType,
+            EvidenceSource,
+            FrozenEvidenceEntry,
+            FrozenEvidenceEntry.location,
+            EvidenceSnapshot,
+            encode_evidence_snapshot,
+            decode_evidence_snapshot,
+            SessionEvidenceStore,
+            SessionEvidenceStore.capture,
+            SessionEvidenceStore.verify,
+            SessionEvidenceStore.load,
+            SessionEvidenceStore.close,
+            RepositoryHostContextProvider,
+            RepositoryHostContextProvider.load_context,
             DialogueRuntimeError,
             DialogueRuntime,
             DialogueRuntime.host,
             DialogueRuntime.browser,
             DialogueRuntime.public_stream,
+            DialogueRuntime.evidence,
             DialogueRuntime.resolve,
             DialogueRuntime.recover,
             DialogueRuntime.replay_committed,

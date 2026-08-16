@@ -3,13 +3,15 @@ from __future__ import annotations
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
+from unittest import mock
 
 import tests.xsync_v2_path  # noqa: F401
 from xsync_v2.coordinator import DialogueSessionConfig
 from xsync_v2.domain import EvidenceCheck, EvidenceHealth, Lens
 from xsync_v2.event_codec import sha256_digest
 from xsync_v2.host_context import EvidenceContextClaim, HostContextSource
-from xsync_v2.runtime import DialogueRuntime, DialogueRuntimeError
+from xsync_v2.observers.work_wake import WorkWakeHint
+from xsync_v2.runtime import DialogueRuntime, DialogueRuntimeError, _WakeRelay
 from xsync_v2.secure_fs import SecureFsError
 
 
@@ -151,6 +153,7 @@ class DialogueRuntimeTest(unittest.TestCase):
             lambda: runtime.host,
             lambda: runtime.browser,
             lambda: runtime.public_stream,
+            lambda: runtime.evidence,
         ):
             with self.subTest(operation=operation), self.assertRaisesRegex(
                 DialogueRuntimeError,
@@ -166,6 +169,98 @@ class DialogueRuntimeTest(unittest.TestCase):
             self.build_runtime(Path("relative-state"))
         with self.assertRaisesRegex(SecureFsError, "UNSAFE_PATH"):
             self.build_runtime(self.root / "missing")
+
+    def test_runtime_configuration_modes_are_explicit_and_exclusive(self) -> None:
+        common = {
+            "runtime_authority_verifier": lambda _check, _authority: True,
+            "lease_clock": lambda: self.now,
+            "browser_clock": lambda: "2026-08-16T15:00:00+08:00",
+            "monotonic_clock": lambda: float(self.now),
+        }
+        invalid = (
+            {},
+            {"repository_directory": self.root},
+            {"repository_id": "repository-1"},
+            {
+                "repository_directory": self.root,
+                "repository_id": "repository-1",
+                "evidence_verifier": lambda config: EvidenceCheck(
+                    EvidenceHealth.CURRENT,
+                    config.evidence_digest,
+                ),
+                "context_provider": RuntimeContextProvider(),
+            },
+        )
+        for values in invalid:
+            with self.subTest(values=tuple(values)), self.assertRaisesRegex(
+                DialogueRuntimeError,
+                "INVALID_RUNTIME_CONFIGURATION",
+            ):
+                DialogueRuntime(
+                    self.root,
+                    "registry-1",
+                    "runtime-1",
+                    **common,
+                    **values,
+                )
+
+        for invalid_path in (None, "", "bad\x00path"):
+            with self.subTest(path=invalid_path), self.assertRaisesRegex(
+                DialogueRuntimeError,
+                "INVALID_STATE_DIRECTORY",
+            ):
+                self.build_runtime(invalid_path)  # type: ignore[arg-type]
+
+    def test_injected_mode_has_no_evidence_store_and_context_manager_closes(
+        self,
+    ) -> None:
+        runtime = self.build_runtime(self.root)
+
+        with runtime as entered:
+            self.assertIs(runtime, entered)
+            runtime.close_browser()
+            report = runtime.replay_committed()
+            self.assertIsNotNone(report)
+            assert report is not None
+            self.assertEqual(0, report.buffered_events)
+            with self.assertRaisesRegex(
+                DialogueRuntimeError,
+                "EVIDENCE_STORE_NOT_CONFIGURED",
+            ):
+                _ = runtime.evidence
+
+        with self.assertRaisesRegex(DialogueRuntimeError, "RUNTIME_CLOSED"):
+            runtime.__enter__()
+
+    def test_wake_relay_freezes_one_host_control_target(self) -> None:
+        runtime = self.open_runtime()
+        relay = _WakeRelay()
+        hint = WorkWakeHint("session-1", 1)
+
+        with self.assertRaisesRegex(DialogueRuntimeError, "WAKE_TARGET_NOT_BOUND"):
+            relay.notify(hint)
+        with self.assertRaisesRegex(DialogueRuntimeError, "INVALID_WAKE_TARGET"):
+            relay.bind(object())  # type: ignore[arg-type]
+
+        relay.bind(runtime.host)
+        relay.notify(hint)
+        with self.assertRaisesRegex(
+            DialogueRuntimeError,
+            "WAKE_TARGET_ALREADY_BOUND",
+        ):
+            relay.bind(runtime.host)
+
+    def test_browser_start_failure_closes_the_partial_transport(self) -> None:
+        runtime = self.open_runtime()
+        runtime.resolve(self.config)
+        with mock.patch(
+            "xsync_v2.runtime.LoopbackBrowserServer.start",
+            side_effect=RuntimeError("start-failed"),
+        ), self.assertRaisesRegex(RuntimeError, "start-failed"):
+            runtime.start_browser("session-1", "browser-capability")
+
+        restarted = runtime.start_browser("session-1", "browser-capability")
+        self.assertEqual("127.0.0.1", restarted.address.host)
 
 
 if __name__ == "__main__":
