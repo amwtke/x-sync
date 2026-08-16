@@ -19,6 +19,7 @@ from xsync_v2.browser_server import BrowserServerAddress, LoopbackBrowserServer
 from xsync_v2.browser_service import (
     BrowserCommandRequest,
     BrowserCommandService,
+    CustomTopicIntent,
     PauseTopicIntent,
     RecoverWorkIntent,
     ResumeTopicIntent,
@@ -345,6 +346,7 @@ class ArchitectureTest(unittest.TestCase):
             BrowserCommandRequest,
             SubmitTurnIntent,
             SelectTopicIntent,
+            CustomTopicIntent,
             PauseTopicIntent,
             SwitchTopicIntent,
             ResumeTopicIntent,

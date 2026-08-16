@@ -312,6 +312,14 @@ class SelectTopic:
 
 
 @dataclass(frozen=True, slots=True)
+class SubmitCustomTopic:
+    """Submit a learner-authored topic for Host contract construction."""
+
+    command_id: str
+    topic: str
+
+
+@dataclass(frozen=True, slots=True)
 class StartTopic:
     command_id: str
     contract: TopicContract
@@ -385,6 +393,7 @@ DialogueCommand: TypeAlias = (
     StartSession
     | PresentCandidates
     | SelectTopic
+    | SubmitCustomTopic
     | StartTopic
     | CommitAgentTurn
     | SubmitLearnerTurn

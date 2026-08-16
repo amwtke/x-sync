@@ -31,6 +31,7 @@ from .domain import (
     RecoverWork,
     ResumeTopic,
     SelectTopic,
+    SubmitCustomTopic,
     SubmitLearnerTurn,
     SwitchTopic,
     TriggerBinding,
@@ -85,6 +86,13 @@ class SelectTopicIntent:
 
 
 @dataclass(frozen=True, slots=True)
+class CustomTopicIntent:
+    """Learner-authored topic outside the presented candidates."""
+
+    topic: str
+
+
+@dataclass(frozen=True, slots=True)
 class PauseTopicIntent:
     """Learner request to pause the current Topic Run."""
 
@@ -112,6 +120,7 @@ class RecoverWorkIntent:
 BrowserIntent: TypeAlias = (
     SubmitTurnIntent
     | SelectTopicIntent
+    | CustomTopicIntent
     | PauseTopicIntent
     | SwitchTopicIntent
     | ResumeTopicIntent
@@ -284,6 +293,7 @@ class BrowserCommandService:
             not in {
                 SubmitTurnIntent,
                 SelectTopicIntent,
+                CustomTopicIntent,
                 PauseTopicIntent,
                 SwitchTopicIntent,
                 ResumeTopicIntent,
@@ -297,6 +307,8 @@ class BrowserCommandService:
             valid = is_protocol_id(intent.question_id) and _valid_text(intent.text)
         elif type(intent) is SelectTopicIntent:
             valid = _valid_text(intent.candidate)
+        elif type(intent) is CustomTopicIntent:
+            valid = _valid_text(intent.topic)
         elif type(intent) is ResumeTopicIntent:
             valid = is_protocol_id(intent.topic_run_id)
         elif type(intent) is RecoverWorkIntent:
@@ -349,6 +361,8 @@ class BrowserCommandService:
             )
         if type(intent) is SelectTopicIntent:
             return SelectTopic(command_id, intent.candidate)
+        if type(intent) is CustomTopicIntent:
+            return SubmitCustomTopic(command_id, intent.topic)
         if type(intent) is PauseTopicIntent:
             return PauseTopic(command_id)
         if type(intent) is SwitchTopicIntent:
@@ -378,6 +392,11 @@ class BrowserCommandService:
             intent_tree = {
                 "type": "select_topic",
                 "candidate": intent.candidate,
+            }
+        elif type(intent) is CustomTopicIntent:
+            intent_tree = {
+                "type": "custom_topic",
+                "topic": intent.topic,
             }
         elif type(intent) is PauseTopicIntent:
             intent_tree = {"type": "pause_topic"}
@@ -421,7 +440,7 @@ class BrowserCommandService:
                 input_digest,
                 evidence.evidence_digest,
             )
-        elif type(intent) is SelectTopicIntent:
+        elif type(intent) in {SelectTopicIntent, CustomTopicIntent}:
             trigger = TriggerBinding(
                 TriggerKind.TOPIC_SELECTION,
                 work_id,
@@ -513,6 +532,7 @@ __all__ = [
     "BrowserCommandService",
     "BrowserIntent",
     "BrowserServiceError",
+    "CustomTopicIntent",
     "PauseTopicIntent",
     "RecoverWorkIntent",
     "ResumeTopicIntent",

@@ -156,6 +156,8 @@ class LoopbackBrowserServerTest(unittest.TestCase):
         self.assertIn('id="switch"', html)
         self.assertIn("切换话题", html)
         self.assertIn('{ action: "switch" }', javascript)
+        self.assertIn('id="custom-topic-form"', html)
+        self.assertIn('{ action: "custom", topic }', javascript)
         self.assertNotIn("EventSource", javascript)
         self.assertNotIn("innerHTML", javascript)
 

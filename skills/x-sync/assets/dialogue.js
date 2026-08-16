@@ -109,6 +109,19 @@
       ));
       list.append(button);
     });
+    byId("custom-topic-form").onsubmit = (event) => {
+      event.preventDefault();
+      const customTopic = byId("custom-topic");
+      const topic = customTopic.value.trim();
+      if (!topic) return;
+      mutate(
+        "/api/v2/topic",
+        { action: "custom", topic },
+        "custom-topic",
+      ).then((committed) => {
+        if (committed) customTopic.value = "";
+      });
+    };
   }
 
   function renderTopic(state) {

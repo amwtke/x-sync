@@ -40,6 +40,7 @@ from xsync_v2.domain import (
     SelectTopic,
     SessionLifecycle,
     SubmitLearnerTurn,
+    SubmitCustomTopic,
     SwitchTopic,
     TaskScope,
     TopicContract,
@@ -352,6 +353,23 @@ class BrowserHttpTest(unittest.TestCase):
         self.assertIs(
             TriggerKind.TOPIC_SELECTION,
             selection_request.context.trigger.kind,
+        )
+
+        custom = self.api.handle(
+            request(
+                "POST",
+                "/api/v2/topic",
+                body={"action": "custom", "topic": "结算失败的人工处置边界"},
+                headers=(*common, ("Idempotency-Key", "custom-key")),
+            )
+        )
+        self.assertEqual(200, custom.status)
+        custom_request = self.coordinator.requests[-1]
+        self.assertIs(type(custom_request.command), SubmitCustomTopic)
+        self.assertEqual("结算失败的人工处置边界", custom_request.command.topic)
+        self.assertIs(
+            TriggerKind.TOPIC_SELECTION,
+            custom_request.context.trigger.kind,
         )
 
     def test_stream_is_authenticated_cursor_resumable_and_safe(self) -> None:

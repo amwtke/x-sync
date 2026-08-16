@@ -43,6 +43,7 @@ from xsync_v2.domain import (
     SessionStarted,
     StartSession,
     StartTopic,
+    SubmitCustomTopic,
     SubmitLearnerTurn,
     SwitchTopic,
     TaskScope,
@@ -209,7 +210,7 @@ def commit_for_test(state, pending):
 def default_context(state, command):
     if isinstance(command, (StartSession, PresentCandidates, SwitchTopic)):
         return context(TriggerKind.TOPIC_CANDIDATES)
-    if isinstance(command, SelectTopic):
+    if isinstance(command, (SelectTopic, SubmitCustomTopic)):
         return context(TriggerKind.TOPIC_SELECTION)
     if isinstance(command, StartTopic):
         return context(TriggerKind.INITIAL_TURN)
@@ -315,14 +316,14 @@ class StateMachineTest(unittest.TestCase):
         self.assertIsNotNone(started.active_topic)
 
         forged = TopicSelectionSubmitted(
-            "Outbox",
+            "",
             cast(TriggerBinding, selection_context.trigger),
         )
         choosing = apply(
             apply(initial_dialogue_state("dlg-2", 1), StartSession("start-2")),
             PresentCandidates("candidates-2", ("支付一致性",)),
         )
-        with self.assertRaisesRegex(ValueError, "ILLEGAL_EVENT_TRANSITION"):
+        with self.assertRaisesRegex(ValueError, "INVALID_EVENT_ENVELOPE"):
             reduce(
                 choosing,
                 CommittedDialogueEvent(
@@ -334,6 +335,26 @@ class StateMachineTest(unittest.TestCase):
                     forged,
                 ),
             )
+
+    def test_custom_topic_creates_the_same_canonical_contract_work(self):
+        state = apply(initial_dialogue_state("dlg-custom", 1), StartSession("start"))
+        state = apply(
+            state,
+            PresentCandidates("candidates", ("支付一致性", "Outbox")),
+        )
+        custom = "我想梳理结算失败后的人工处置边界"
+        state = apply(
+            state,
+            SubmitCustomTopic("custom-topic", custom),
+            context(TriggerKind.TOPIC_SELECTION, work_id="custom-selection"),
+        )
+
+        self.assertEqual(ConversationPhase.WAITING_HOST, state.phase)
+        self.assertEqual(custom, state.selected_candidate)
+        self.assertEqual((), state.candidates)
+        self.assertIsNotNone(state.session_work)
+        assert state.session_work is not None
+        self.assertIs(TriggerKind.TOPIC_SELECTION, state.session_work.trigger.kind)
 
     def test_socratic_turn_uses_one_canonical_path(self):
         state = initial_dialogue_state("dlg-1", 1)

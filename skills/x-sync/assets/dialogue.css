@@ -25,14 +25,14 @@ body {
     var(--paper);
 }
 
-button, textarea { font: inherit; }
+button, input, textarea { font: inherit; }
 
 button {
   cursor: pointer;
   border: 0;
 }
 
-button:focus-visible, textarea:focus-visible {
+button:focus-visible, input:focus-visible, textarea:focus-visible {
   outline: 3px solid rgba(31, 106, 80, 0.3);
   outline-offset: 2px;
 }
@@ -86,6 +86,18 @@ button:focus-visible, textarea:focus-visible {
   border-color: rgba(31, 106, 80, 0.45);
   box-shadow: 0 10px 28px rgba(31, 81, 61, 0.1);
 }
+.custom-topic-form { margin-top: 24px; }
+.custom-topic-row { display: flex; align-items: flex-start; gap: 10px; }
+.custom-topic-row input {
+  min-width: 0;
+  flex: 1;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.88);
+}
+.custom-topic-row .primary { margin-top: 0; white-space: nowrap; }
 
 .waiting { display: flex; align-items: center; gap: 22px; }
 .pulse {
@@ -145,6 +157,8 @@ button:disabled { cursor: wait; opacity: 0.55; }
   .masthead, .topic-heading { align-items: stretch; flex-direction: column; }
   .masthead { gap: 8px; }
   .panel, .notice { border-radius: 18px; }
+  .custom-topic-row { flex-direction: column; }
+  .custom-topic-row input, .custom-topic-row .primary { width: 100%; }
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -18,6 +18,7 @@ from .browser_service import (
     BrowserCommandService,
     BrowserIntent,
     BrowserServiceError,
+    CustomTopicIntent,
     PauseTopicIntent,
     RecoverWorkIntent,
     ResumeTopicIntent,
@@ -223,6 +224,7 @@ def _allowed_actions(state: DialogueState) -> tuple[str, ...]:
     if state.phase is ConversationPhase.AWAITING_USER:
         actions.add("submit_turn")
     if state.phase is ConversationPhase.CHOOSING_TOPIC:
+        actions.add("custom_topic")
         actions.add("select")
     if state.phase is ConversationPhase.NONE and state.paused_topics:
         actions.add("resume")
@@ -546,6 +548,11 @@ class BrowserApi:
             if type(candidate) is not str:
                 raise BrowserApiError("VALIDATION_FAILED")
             return SelectTopicIntent(candidate)
+        if action == "custom" and set(body) == {"action", "topic"}:
+            topic = body["topic"]
+            if type(topic) is not str:
+                raise BrowserApiError("VALIDATION_FAILED")
+            return CustomTopicIntent(topic)
         if action == "pause" and set(body) == {"action"}:
             return PauseTopicIntent()
         if action == "switch" and set(body) == {"action"}:

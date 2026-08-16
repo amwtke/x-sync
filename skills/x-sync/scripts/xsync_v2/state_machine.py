@@ -49,6 +49,7 @@ from .domain import (
     SessionDeactivationPrepared,
     StartSession,
     StartTopic,
+    SubmitCustomTopic,
     SubmitLearnerTurn,
     SwitchTopic,
     TaskScope,
@@ -792,6 +793,34 @@ def _select_topic(
     )
 
 
+def _submit_custom_topic(
+    state: DialogueState, command: DialogueCommand, context: DecisionContext
+) -> Decision:
+    if type(command) is not SubmitCustomTopic:
+        return Rejected("TOPIC_STATE_CONFLICT")
+    if (
+        state.phase is not ConversationPhase.CHOOSING_TOPIC
+        or state.active_topic is not None
+        or state.session_work is not None
+        or state.selected_candidate is not None
+    ):
+        return Rejected("TOPIC_STATE_CONFLICT")
+    if not _valid_text(command.topic):
+        return Rejected("VALIDATION_FAILED")
+    trigger = _matching_trigger(
+        context.trigger,
+        TriggerKind.TOPIC_SELECTION,
+        None,
+        context.evidence.evidence_digest,
+    )
+    if trigger is None:
+        return Rejected("VALIDATION_FAILED")
+    return _accept(
+        command.command_id,
+        TopicSelectionSubmitted(command.topic, trigger),
+    )
+
+
 def _start_topic(
     state: DialogueState, command: DialogueCommand, context: DecisionContext
 ) -> Decision:
@@ -1235,6 +1264,7 @@ TRANSITION_TABLE: dict[type, Handler] = {
     StartSession: _start_session,
     PresentCandidates: _present_candidates,
     SelectTopic: _select_topic,
+    SubmitCustomTopic: _submit_custom_topic,
     StartTopic: _start_topic,
     CommitAgentTurn: _commit_agent_turn,
     SubmitLearnerTurn: _submit_turn,
@@ -1730,7 +1760,7 @@ def reduce(
             and state.active_topic is None
             and state.session_work is None
             and state.selected_candidate is None
-            and payload.candidate in state.candidates
+            and _valid_text(payload.candidate)
             and _valid_trigger(
                 payload.next_trigger,
                 TriggerKind.TOPIC_SELECTION,
