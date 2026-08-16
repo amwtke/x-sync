@@ -10,7 +10,12 @@ import tests.xsync_v2_path  # noqa: F401
 
 # isort: split
 from xsync_v2 import secure_fs
-from xsync_v2.secure_fs import EntryKind, SecureDirectory, SecureFsError
+from xsync_v2.secure_fs import (
+    EntryKind,
+    SecureDirectory,
+    SecureDirectoryIdentity,
+    SecureFsError,
+)
 
 
 class SecureFsTest(unittest.TestCase):
@@ -104,6 +109,19 @@ class SecureFsTest(unittest.TestCase):
             root.close()
         self.assertEqual(b"anchored", (anchored / "event.json").read_bytes())
         self.assertFalse((outside / "event.json").exists())
+
+    def test_identity_is_pinned_to_the_live_private_directory_handle(self):
+        root = SecureDirectory.open(self.root)
+        metadata = os.stat(self.root, follow_symlinks=False)
+
+        self.assertEqual(
+            SecureDirectoryIdentity(metadata.st_dev, metadata.st_ino),
+            root.identity(),
+        )
+
+        root.close()
+        with self.assertRaisesRegex(SecureFsError, "DIRECTORY_CLOSED"):
+            root.identity()
 
     def test_bounded_read_accepts_only_unchanged_regular_private_files(self):
         with SecureDirectory.open(self.root) as root:

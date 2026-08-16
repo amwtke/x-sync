@@ -1,12 +1,13 @@
 import ast
 import hashlib
 import inspect
+import unittest
 from pathlib import Path
 from typing import get_args
-import unittest
 
 import tests.xsync_v2_path  # noqa: F401
 
+from xsync_v2 import event_store, registry_store
 from xsync_v2.browser_http import (
     BrowserApi,
     BrowserHttpRequest,
@@ -48,6 +49,7 @@ from xsync_v2.evidence import (
     decode_evidence_snapshot,
     encode_evidence_snapshot,
 )
+from xsync_v2.host_api import HostApi, HostApiError, HostApiResponse
 from xsync_v2.host_context import (
     EvidenceContextClaim,
     HostContextCapsule,
@@ -56,7 +58,6 @@ from xsync_v2.host_context import (
     build_host_context,
     encode_host_context,
 )
-from xsync_v2.host_api import HostApi, HostApiError, HostApiResponse
 from xsync_v2.host_control import (
     HostClaimEnvelope,
     HostControl,
@@ -67,6 +68,7 @@ from xsync_v2.host_control import (
     HostWorkDisposition,
     HostWorkMetadata,
 )
+from xsync_v2.host_ipc import HostIpcClient, HostIpcError, HostIpcServer
 from xsync_v2.host_result import (
     DialogueTurnResult,
     HostResultError,
@@ -92,18 +94,17 @@ from xsync_v2.lease_store import (
     LeaseExhaustionProof,
     LeaseStore,
 )
-from xsync_v2 import event_store, registry_store
 from xsync_v2.observer import ObserverHub
 from xsync_v2.observers.public_stream import (
     PublicStreamObserver,
     PublicStreamSubscription,
 )
 from xsync_v2.observers.work_wake import WorkWakeObserver
-from xsync_v2.runtime import DialogueRuntime, DialogueRuntimeError
 from xsync_v2.repository_context import RepositoryHostContextProvider
+from xsync_v2.runtime import DialogueRuntime, DialogueRuntimeError
+from xsync_v2.secure_fs import SecureDirectory, SecureDirectoryIdentity
 from xsync_v2.state_machine import TRANSITION_TABLE, decide, reduce
 from xsync_v2.work import derive_runnable_work
-
 
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = ROOT / "skills" / "x-sync" / "scripts" / "xsync_v2"
@@ -169,6 +170,10 @@ class ArchitectureTest(unittest.TestCase):
         api_text = api_path.read_text(encoding="utf-8")
         self.assertNotIn("state_machine", api_text)
         self.assertNotIn("coordinator", imports(api_path))
+        ipc_path = PACKAGE / "host_ipc.py"
+        ipc_text = ipc_path.read_text(encoding="utf-8")
+        self.assertNotIn("state_machine", ipc_text)
+        self.assertNotIn("coordinator", imports(ipc_path))
 
     def test_browser_http_is_only_an_authenticated_dto_adapter(self):
         http_path = PACKAGE / "browser_http.py"
@@ -264,6 +269,14 @@ class ArchitectureTest(unittest.TestCase):
             HostApiResponse,
             HostApi,
             HostApi.handle,
+            HostIpcError,
+            HostIpcServer,
+            HostIpcServer.path,
+            HostIpcServer.fatal_error,
+            HostIpcServer.start,
+            HostIpcServer.close,
+            HostIpcClient,
+            HostIpcClient.call,
             HostResultError,
             HostResultKind,
             TopicCandidatesResult,
@@ -337,7 +350,12 @@ class ArchitectureTest(unittest.TestCase):
             DialogueRuntime.replay_committed,
             DialogueRuntime.start_browser,
             DialogueRuntime.close_browser,
+            DialogueRuntime.start_host_ipc,
+            DialogueRuntime.close_host_ipc,
             DialogueRuntime.close,
+            SecureDirectoryIdentity,
+            SecureDirectory,
+            SecureDirectory.identity,
         )
         self.assertTrue(all(inspect.getdoc(item) for item in public_api))
 

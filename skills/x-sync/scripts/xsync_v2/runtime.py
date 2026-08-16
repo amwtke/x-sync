@@ -25,6 +25,7 @@ from .dispatch import AfterCommitDispatcher, AfterCommitReport
 from .evidence import SessionEvidenceStore
 from .host_control import HostContextProvider, HostControl, MonotonicClock
 from .host_api import HostApi
+from .host_ipc import HostIpcServer
 from .host_work import HostWorkService, authoritative_work_snapshot
 from .lease_store import (
     Clock as LeaseClock,
@@ -223,6 +224,7 @@ class DialogueRuntime:
         self._dispatcher = dispatcher
         self._evidence_store = evidence_store
         self._browser_server: LoopbackBrowserServer | None = None
+        self._host_ipc_server: HostIpcServer | None = None
         self._lifecycle_lock = threading.Lock()
         self._closed = False
 
@@ -318,6 +320,42 @@ class DialogueRuntime:
         if server is not None:
             server.close()
 
+    def start_host_ipc(
+        self,
+        socket_path: str | os.PathLike[str],
+        *,
+        max_clients: int = 8,
+        request_timeout: float | int = 5.0,
+    ) -> HostIpcServer:
+        """Start the one owner-only Unix Host JSON transport."""
+        self._require_open()
+        with self._lifecycle_lock:
+            if self._closed:
+                raise DialogueRuntimeError("RUNTIME_CLOSED")
+            if self._host_ipc_server is not None:
+                raise DialogueRuntimeError("HOST_IPC_ALREADY_RUNNING")
+            server = HostIpcServer(
+                self._host_api,
+                socket_path,
+                max_clients=max_clients,
+                request_timeout=request_timeout,
+            )
+            try:
+                server.start()
+            except BaseException:
+                server.close()
+                raise
+            self._host_ipc_server = server
+            return server
+
+    def close_host_ipc(self) -> None:
+        """Idempotently stop Host IPC while preserving canonical state."""
+        with self._lifecycle_lock:
+            server = self._host_ipc_server
+            self._host_ipc_server = None
+        if server is not None:
+            server.close()
+
     def close(self) -> None:
         """Idempotently release Browser, lock, and anchored directory handles."""
         with self._lifecycle_lock:
@@ -326,12 +364,20 @@ class DialogueRuntime:
             self._closed = True
             server = self._browser_server
             self._browser_server = None
+            host_ipc_server = self._host_ipc_server
+            self._host_ipc_server = None
         error: BaseException | None = None
         if server is not None:
             try:
                 server.close()
             except BaseException as exc:
                 error = exc
+        if host_ipc_server is not None:
+            try:
+                host_ipc_server.close()
+            except BaseException as exc:
+                if error is None:
+                    error = exc
         if self._evidence_store is not None:
             self._evidence_store.close()
         try:

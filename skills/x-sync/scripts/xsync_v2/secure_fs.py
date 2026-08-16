@@ -46,6 +46,14 @@ class SecureEntry:
     inode: int
 
 
+@dataclass(frozen=True, slots=True)
+class SecureDirectoryIdentity:
+    """Pinned device/inode identity for one owner-only directory handle."""
+
+    device: int
+    inode: int
+
+
 def _require_secure_primitives() -> None:
     required_dir_fd = {os.open, os.mkdir, os.rename, os.stat, os.unlink, os.link}
     if (
@@ -195,6 +203,16 @@ class SecureDirectory:
             os.close(descriptor)
         except OSError:
             pass
+
+    def identity(self) -> SecureDirectoryIdentity:
+        """Return the live anchored directory identity without a path lookup."""
+        try:
+            metadata = os.fstat(self._require_open())
+        except OSError as exc:
+            raise SecureFsError("FILESYSTEM_ERROR") from exc
+        if not _directory_metadata_is_safe(metadata):
+            raise SecureFsError("INSECURE_PERMISSIONS")
+        return SecureDirectoryIdentity(metadata.st_dev, metadata.st_ino)
 
     def open_directory(self, component: str) -> SecureDirectory:
         """Open one existing private child directory without following links."""
