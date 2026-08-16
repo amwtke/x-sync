@@ -74,6 +74,7 @@ from xsync_v2.observers.public_stream import (
     PublicStreamSubscription,
 )
 from xsync_v2.observers.work_wake import WorkWakeObserver
+from xsync_v2.runtime import DialogueRuntime, DialogueRuntimeError
 from xsync_v2.state_machine import TRANSITION_TABLE, decide, reduce
 from xsync_v2.work import derive_runnable_work
 
@@ -258,6 +259,17 @@ class ArchitectureTest(unittest.TestCase):
             PublicStreamSubscription.close,
             WorkWakeObserver,
             WorkWakeObserver.on_batch,
+            DialogueRuntimeError,
+            DialogueRuntime,
+            DialogueRuntime.host,
+            DialogueRuntime.browser,
+            DialogueRuntime.public_stream,
+            DialogueRuntime.resolve,
+            DialogueRuntime.recover,
+            DialogueRuntime.replay_committed,
+            DialogueRuntime.start_browser,
+            DialogueRuntime.close_browser,
+            DialogueRuntime.close,
         )
         self.assertTrue(all(inspect.getdoc(item) for item in public_api))
 
