@@ -66,6 +66,17 @@ from xsync_v2.host_control import (
     HostWorkDisposition,
     HostWorkMetadata,
 )
+from xsync_v2.host_result import (
+    DialogueTurnResult,
+    HostResultError,
+    HostResultKind,
+    TopicCandidatesResult,
+    TopicStartedResult,
+    WorkFailureResult,
+    decode_host_result,
+    encode_host_result,
+    host_result_command,
+)
 from xsync_v2.host_work import (
     HostWorkPublishRequest,
     HostWorkService,
@@ -135,7 +146,11 @@ class ArchitectureTest(unittest.TestCase):
             self.assertNotIn("LeaseStore", text, path.name)
 
     def test_host_control_is_transport_and_model_neutral(self):
-        paths = (PACKAGE / "host_context.py", PACKAGE / "host_control.py")
+        paths = (
+            PACKAGE / "host_context.py",
+            PACKAGE / "host_control.py",
+            PACKAGE / "host_result.py",
+        )
         forbidden_imports = {
             "asyncio",
             "http",
@@ -237,6 +252,15 @@ class ArchitectureTest(unittest.TestCase):
             HostControl.renew,
             HostControl.reclaim,
             HostControl.publish,
+            HostResultError,
+            HostResultKind,
+            TopicCandidatesResult,
+            TopicStartedResult,
+            DialogueTurnResult,
+            WorkFailureResult,
+            decode_host_result,
+            encode_host_result,
+            host_result_command,
             BrowserCommandRequest,
             SubmitTurnIntent,
             SelectTopicIntent,

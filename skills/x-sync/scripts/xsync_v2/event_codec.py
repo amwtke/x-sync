@@ -338,6 +338,29 @@ def sha256_digest(payload: bytes) -> str:
     return f"sha256:{hashlib.sha256(payload).hexdigest()}"
 
 
+def decode_host_domain_value(value: object, expected: type[object]) -> object:
+    """Decode one allowlisted Host result value into an exact domain record.
+
+    This deliberately exposes only the two semantic result records accepted
+    from a Host adapter.  Persisted event/state decoding continues to use the
+    closed record codecs below.
+    """
+    if expected not in {TopicContract, AgentTurnResult}:
+        raise ValueError("HOST_DOMAIN_TYPE_NOT_ALLOWED")
+    decoded = _from_tree(value, expected)
+    _validate_domain_identifiers(decoded)
+    return decoded
+
+
+def encode_host_domain_value(value: object) -> object:
+    """Encode one allowlisted exact Host result domain record as a JSON tree."""
+    value_type = type(value)
+    if value_type not in {TopicContract, AgentTurnResult}:
+        raise ValueError("HOST_DOMAIN_TYPE_NOT_ALLOWED")
+    _validate_domain_identifiers(value)
+    return _to_tree(value, value_type)
+
+
 def _to_tree(value: object, expected: object) -> object:
     """Encode one value only after checking its exact runtime annotation."""
     origin = get_origin(expected)
