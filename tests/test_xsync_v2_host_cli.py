@@ -294,6 +294,103 @@ class HostCliTest(unittest.TestCase):
             self.runtime.browser.current("session-1").dialogue_state.phase.value,
         )
 
+    def test_supervise_is_the_only_stream_json_operation(self) -> None:
+        output = BytesIO()
+        errors = StringIO()
+
+        class FakeSupervisor:
+            def run(inner_self) -> str:
+                del inner_self
+                options = supervisor.call_args.kwargs
+                options["emit"](
+                    b'{"stream_sequence":1,"type":"ready"}\n'
+                )
+                options["emit"](
+                    b'{"stream_sequence":2,"type":"closed"}\n'
+                )
+                return "requested"
+
+        with mock.patch.object(
+            host_cli,
+            "HostSupervisor",
+            return_value=FakeSupervisor(),
+        ) as supervisor:
+            status = main(
+                [
+                    "supervise",
+                    "--socket",
+                    str(self.socket_path),
+                    "--session",
+                    "session-1",
+                    "--owner",
+                    "owner-1",
+                    "--wait-timeout",
+                    "5",
+                    "--lease-seconds",
+                    "30",
+                    "--max-tenure-seconds",
+                    "120",
+                    "--stream-json",
+                ],
+                stdout=output,
+                stderr=errors,
+            )
+
+        self.assertEqual(0, status)
+        self.assertEqual("", errors.getvalue())
+        self.assertEqual(
+            ["ready", "closed"],
+            [json.loads(line)["type"] for line in output.getvalue().splitlines()],
+        )
+        self.assertEqual(
+            (str(self.socket_path), "session-1", "owner-1", "owner-1"),
+            supervisor.call_args.args,
+        )
+        self.assertEqual(5, supervisor.call_args.kwargs["wait_timeout"])
+        self.assertEqual(30, supervisor.call_args.kwargs["lease_seconds"])
+
+        missing_stream = self.run_cli(
+            "supervise",
+            "--socket",
+            str(self.socket_path),
+            "--session",
+            "session-1",
+            "--owner",
+            "owner-1",
+        )
+        self.assertEqual(2, missing_stream[0])
+        self.assertEqual([], missing_stream[1])
+        self.assertEqual(
+            "HOST_CLI_STREAM_JSON_REQUIRED\n",
+            missing_stream[3],
+        )
+
+    def test_real_supervisor_cli_emits_ready_and_terminal_closed_events(self) -> None:
+        self.runtime.close_host_ipc()
+        status, lines, _response, errors = self.run_cli(
+            "supervise",
+            "--socket",
+            str(self.socket_path),
+            "--session",
+            "session-1",
+            "--owner",
+            "owner-1",
+            "--wait-timeout",
+            "1",
+            "--lease-seconds",
+            "30",
+            "--max-tenure-seconds",
+            "120",
+            "--stream-json",
+        )
+
+        events = [json.loads(line) for line in lines]
+        self.assertEqual(0, status)
+        self.assertEqual("", errors)
+        self.assertEqual(["ready", "closed"], [item["type"] for item in events])
+        self.assertEqual([1, 2], [item["stream_sequence"] for item in events])
+        self.assertEqual("HOST_IPC_ADDRESS_UNAVAILABLE", events[-1]["reason"])
+
     def test_api_failure_is_stdout_json_and_transport_failure_is_stderr(self) -> None:
         failed = self.run_cli(
             "claim",

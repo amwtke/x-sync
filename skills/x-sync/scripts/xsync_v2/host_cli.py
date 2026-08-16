@@ -1,9 +1,10 @@
-"""Thin one-shot CLI over the shared model-neutral Host IPC protocol."""
+"""Thin CLI over the shared model-neutral Host IPC and Supervisor protocol."""
 
 from __future__ import annotations
 
 import argparse
 from collections.abc import Sequence
+from datetime import UTC, datetime
 import json
 import os
 import stat
@@ -17,6 +18,7 @@ from .event_codec import (
 )
 from .host_api import MAX_HOST_API_REQUEST_BYTES
 from .host_ipc import HostIpcClient, HostIpcError
+from .host_supervisor import HostSupervisor, HostSupervisorError
 
 
 _MAX_INPUT_FILE_BYTES = MAX_HOST_API_REQUEST_BYTES
@@ -60,6 +62,17 @@ def _nonnegative(value: str) -> int:
 def _parser() -> _ArgumentParser:
     parser = _ArgumentParser(prog="xsync dialogue host", add_help=True)
     commands = parser.add_subparsers(dest="operation", required=True)
+
+    supervise = commands.add_parser("supervise")
+    supervise.add_argument("--socket", required=True)
+    supervise.add_argument("--session", required=True)
+    supervise.add_argument("--owner", required=True)
+    supervise.add_argument("--wait-timeout", type=_positive, default=30)
+    supervise.add_argument("--retry-interval", type=float, default=1.0)
+    supervise.add_argument("--lease-seconds", type=_positive, default=180)
+    supervise.add_argument("--max-tenure-seconds", type=_positive, default=900)
+    supervise.add_argument("--io-timeout", type=float)
+    supervise.add_argument("--stream-json", action="store_true")
 
     wait = commands.add_parser("wait")
     _common(wait)
@@ -333,16 +346,46 @@ def _streams(
     return output, errors
 
 
+def _utc_now() -> str:
+    return datetime.now(UTC).isoformat()
+
+
+def _run_supervisor(arguments: argparse.Namespace, output: BinaryIO) -> int:
+    if arguments.stream_json is not True:
+        raise HostCliError("HOST_CLI_STREAM_JSON_REQUIRED")
+
+    def emit(line: bytes) -> None:
+        output.write(line)
+        output.flush()
+
+    HostSupervisor(
+        arguments.socket,
+        arguments.session,
+        arguments.owner,
+        arguments.owner,
+        emit=emit,
+        occurred_at=_utc_now,
+        wait_timeout=arguments.wait_timeout,
+        retry_interval=arguments.retry_interval,
+        lease_seconds=arguments.lease_seconds,
+        max_tenure_seconds=arguments.max_tenure_seconds,
+        io_timeout=arguments.io_timeout,
+    ).run()
+    return 0
+
+
 def main(
     argv: Sequence[str] | None = None,
     *,
     stdout: BinaryIO | None = None,
     stderr: TextIO | None = None,
 ) -> int:
-    """Run one Host operation; stdout is either empty or one JSON envelope."""
+    """Run one-shot JSON or long-lived Supervisor NDJSON Host operations."""
     output, errors = _streams(stdout, stderr)
     try:
         arguments = _parser().parse_args(argv)
+        if arguments.operation == "supervise":
+            return _run_supervisor(arguments, output)
         if arguments.json is not True:
             raise HostCliError("HOST_CLI_JSON_REQUIRED")
         request = _request(arguments)
@@ -354,7 +397,7 @@ def main(
         output.write(response.body + b"\n")
         output.flush()
         return 0 if success else 1
-    except (HostCliError, HostIpcError) as exc:
+    except (HostCliError, HostIpcError, HostSupervisorError) as exc:
         errors.write(exc.code + "\n")
         errors.flush()
         return 2
