@@ -124,6 +124,32 @@ class PublicStreamObserverTest(unittest.TestCase):
         self.assertTrue(all(item.fields == () for item in projected))
         self.assertEqual(2, subscription.cursor)
 
+    def test_topic_selection_exposes_only_the_selected_candidate(self) -> None:
+        observer = PublicStreamObserver(
+            retention_limit=8,
+            subscriber_queue_limit=8,
+        )
+        subscription = observer.subscribe("session-1", after_sequence=0)
+        observer.on_batch(
+            batch(
+                event(
+                    "event-select",
+                    1,
+                    tag="topic_selection_submitted",
+                    fields=(
+                        ("candidate", "Outbox"),
+                        ("work_id", "work-secret"),
+                        ("evidence_digest", "sha256:secret"),
+                    ),
+                )
+            )
+        )
+
+        (projected,) = subscription.read_available()
+        self.assertEqual("topic_selection_submitted", projected.event_type)
+        self.assertEqual((("candidate", "Outbox"),), projected.fields)
+        self.assertNotIn("work-secret", repr(projected))
+
     def test_failure_lifecycle_is_contiguous_and_fail_closed(self) -> None:
         observer = PublicStreamObserver(
             retention_limit=8,

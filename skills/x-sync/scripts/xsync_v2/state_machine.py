@@ -44,6 +44,7 @@ from .domain import (
     Rejected,
     ReportWorkFailure,
     ResumeTopic,
+    SelectTopic,
     SessionStarted,
     SessionDeactivationPrepared,
     StartSession,
@@ -55,6 +56,7 @@ from .domain import (
     TopicPaused,
     TopicResumed,
     TopicRunState,
+    TopicSelectionSubmitted,
     TopicStarted,
     TriggerBinding,
     TriggerKind,
@@ -760,12 +762,54 @@ def _present_candidates(
     )
 
 
+def _select_topic(
+    state: DialogueState, command: DialogueCommand, context: DecisionContext
+) -> Decision:
+    if type(command) is not SelectTopic:
+        return Rejected("TOPIC_STATE_CONFLICT")
+    if (
+        state.phase is not ConversationPhase.CHOOSING_TOPIC
+        or state.active_topic is not None
+        or state.session_work is not None
+        or state.selected_candidate is not None
+    ):
+        return Rejected("TOPIC_STATE_CONFLICT")
+    if not _valid_text(command.candidate) or command.candidate not in state.candidates:
+        return Rejected("VALIDATION_FAILED")
+    trigger = _matching_trigger(
+        context.trigger,
+        TriggerKind.TOPIC_SELECTION,
+        None,
+        context.evidence.evidence_digest,
+    )
+    if trigger is None:
+        return Rejected("VALIDATION_FAILED")
+    return _accept(
+        command.command_id,
+        TopicSelectionSubmitted(command.candidate, trigger),
+    )
+
+
 def _start_topic(
     state: DialogueState, command: DialogueCommand, context: DecisionContext
 ) -> Decision:
     if type(command) is not StartTopic:
         return Rejected("TOPIC_STATE_CONFLICT")
-    if state.phase is not ConversationPhase.CHOOSING_TOPIC or state.active_topic:
+    legacy_selection = (
+        state.phase is ConversationPhase.CHOOSING_TOPIC
+        and state.session_work is None
+        and state.selected_candidate is None
+        and command.selected_candidate is None
+    )
+    durable_selection = (
+        state.phase is ConversationPhase.WAITING_HOST
+        and state.session_work is not None
+        and state.session_work.status is WorkStatus.QUEUED
+        and state.session_work.trigger.kind is TriggerKind.TOPIC_SELECTION
+        and state.selected_candidate is not None
+        and command.selected_candidate == state.selected_candidate
+    )
+    if state.active_topic is not None or not (legacy_selection or durable_selection):
         return Rejected("TOPIC_STATE_CONFLICT")
     if not _valid_contract(command.contract):
         return Rejected("VALIDATION_FAILED")
@@ -782,9 +826,20 @@ def _start_topic(
     )
     if not _valid_evidence(context.evidence) or trigger is None:
         return Rejected("VALIDATION_FAILED")
+    selection_trigger = (
+        cast(CurrentWorkState, state.session_work).trigger
+        if durable_selection
+        else None
+    )
     return _accept(
         command.command_id,
-        TopicStarted(command.contract, context.evidence, trigger),
+        TopicStarted(
+            command.contract,
+            context.evidence,
+            trigger,
+            command.selected_candidate,
+            selection_trigger,
+        ),
     )
 
 
@@ -1155,6 +1210,7 @@ def _recover_work(
 TRANSITION_TABLE: dict[type, Handler] = {
     StartSession: _start_session,
     PresentCandidates: _present_candidates,
+    SelectTopic: _select_topic,
     StartTopic: _start_topic,
     CommitAgentTurn: _commit_agent_turn,
     SubmitLearnerTurn: _submit_turn,
@@ -1290,6 +1346,10 @@ def validate_state(state: DialogueState) -> None:
         or type(state.candidates) is not tuple
         or type(state.paused_topics) is not tuple
         or (
+            state.selected_candidate is not None
+            and not _valid_text(state.selected_candidate)
+        )
+        or (
             state.session_work is not None
             and not _valid_current_work(
                 state.session_work,
@@ -1327,6 +1387,8 @@ def validate_state(state: DialogueState) -> None:
         state.phase is ConversationPhase.CHOOSING_TOPIC
         and not _valid_candidates(state.candidates)
     ):
+        raise ValueError("STATE_INVARIANT_VIOLATION")
+    if state.phase is ConversationPhase.CHOOSING_TOPIC and state.selected_candidate:
         raise ValueError("STATE_INVARIANT_VIOLATION")
     if (
         state.phase is not ConversationPhase.CHOOSING_TOPIC
@@ -1370,12 +1432,30 @@ def validate_state(state: DialogueState) -> None:
             raise ValueError("STATE_INVARIANT_VIOLATION")
     elif state.session_work is not None:
         raise ValueError("STATE_INVARIANT_VIOLATION")
-    if state.session_work is not None and not _valid_trigger(
-        state.session_work.trigger,
-        TriggerKind.TOPIC_CANDIDATES,
-        None,
-        state.session_work.trigger.evidence_digest,
-    ):
+    if state.session_work is not None:
+        session_kind = state.session_work.trigger.kind
+        if (
+            session_kind not in {
+                TriggerKind.TOPIC_CANDIDATES,
+                TriggerKind.TOPIC_SELECTION,
+            }
+            or not _valid_trigger(
+                state.session_work.trigger,
+                session_kind,
+                None,
+                state.session_work.trigger.evidence_digest,
+            )
+            or (
+                session_kind is TriggerKind.TOPIC_CANDIDATES
+                and state.selected_candidate is not None
+            )
+            or (
+                session_kind is TriggerKind.TOPIC_SELECTION
+                and state.selected_candidate is None
+            )
+        ):
+            raise ValueError("STATE_INVARIANT_VIOLATION")
+    elif state.selected_candidate is not None:
         raise ValueError("STATE_INVARIANT_VIOLATION")
     if (
         state.session_work is not None
@@ -1415,6 +1495,7 @@ EVENT_PAYLOAD_TYPES = frozenset(
     {
         SessionStarted,
         CandidatesPresented,
+        TopicSelectionSubmitted,
         TopicStarted,
         AgentTurnCommitted,
         LearnerTurnSubmitted,
@@ -1436,11 +1517,23 @@ def _valid_event_payload_shape(payload: object) -> bool:
         return _valid_candidates_shape(
             payload.candidates
         ) and is_canonical_trigger_binding(payload.trigger)
+    if type(payload) is TopicSelectionSubmitted:
+        return _valid_text(payload.candidate) and is_canonical_trigger_binding(
+            payload.next_trigger
+        )
     if type(payload) is TopicStarted:
         return (
             _valid_contract_shape(payload.contract)
             and _valid_evidence_shape(payload.evidence)
             and is_canonical_trigger_binding(payload.initial_trigger)
+            and (
+                payload.selected_candidate is None
+                or _valid_text(payload.selected_candidate)
+            )
+            and (
+                payload.selection_trigger is None
+                or is_canonical_trigger_binding(payload.selection_trigger)
+            )
         )
     if type(payload) is AgentTurnCommitted:
         return (
@@ -1601,11 +1694,50 @@ def reduce(
             phase=ConversationPhase.CHOOSING_TOPIC,
             session_work=None,
         )
-    elif type(payload) is TopicStarted:
+    elif type(payload) is TopicSelectionSubmitted:
         _require(
             state.phase is ConversationPhase.CHOOSING_TOPIC
             and state.active_topic is None
             and state.session_work is None
+            and state.selected_candidate is None
+            and payload.candidate in state.candidates
+            and _valid_trigger(
+                payload.next_trigger,
+                TriggerKind.TOPIC_SELECTION,
+                None,
+                payload.next_trigger.evidence_digest,
+            )
+        )
+        next_state = replace(
+            next_state,
+            candidates=(),
+            selected_candidate=payload.candidate,
+            phase=ConversationPhase.WAITING_HOST,
+            session_work=_queued_work_from_event(
+                state.session_id,
+                event,
+                payload.next_trigger,
+            ),
+        )
+    elif type(payload) is TopicStarted:
+        legacy_selection = (
+            state.phase is ConversationPhase.CHOOSING_TOPIC
+            and state.session_work is None
+            and state.selected_candidate is None
+            and payload.selected_candidate is None
+            and payload.selection_trigger is None
+        )
+        durable_selection = (
+            state.phase is ConversationPhase.WAITING_HOST
+            and state.session_work is not None
+            and state.session_work.status is WorkStatus.QUEUED
+            and state.session_work.trigger.kind is TriggerKind.TOPIC_SELECTION
+            and payload.selected_candidate == state.selected_candidate
+            and payload.selection_trigger == state.session_work.trigger
+        )
+        _require(
+            state.active_topic is None
+            and (legacy_selection or durable_selection)
         )
         contract = payload.contract
         _require(_valid_contract(contract) and _valid_evidence(payload.evidence))
@@ -1643,6 +1775,8 @@ def reduce(
             next_state,
             active_topic=topic,
             candidates=(),
+            selected_candidate=None,
+            session_work=None,
             phase=ConversationPhase.WAITING_HOST,
         )
     elif type(payload) is AgentTurnCommitted:
@@ -1785,6 +1919,7 @@ def reduce(
             lifecycle=SessionLifecycle.OPEN,
             phase=ConversationPhase.NONE,
             candidates=(),
+            selected_candidate=None,
             session_work=None,
         )
     elif type(payload) is TopicResumed:

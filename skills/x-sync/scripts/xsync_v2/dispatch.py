@@ -16,6 +16,7 @@ from .domain import (
     SessionStarted,
     TopicPaused,
     TopicResumed,
+    TopicSelectionSubmitted,
     TopicStarted,
     WorkDeadLettered,
     WorkFailed,
@@ -174,6 +175,11 @@ def _dialogue_payload_view(event: CommittedDialogueEvent) -> ImmutablePayloadVie
         return ImmutablePayloadView(
             "topic_candidates_presented",
             _fields(("candidates", candidates)),
+        )
+    if type(payload) is TopicSelectionSubmitted:
+        return ImmutablePayloadView(
+            "topic_selection_submitted",
+            _fields(("candidate", payload.candidate)),
         )
     if type(payload) is TopicStarted:
         contract = payload.contract

@@ -42,6 +42,7 @@ from .domain import (
     SessionLifecycle,
     SessionDeactivationPrepared,
     StartSession,
+    StartTopic,
     TriggerBinding,
     TriggerKind,
     TopicPaused,
@@ -940,6 +941,7 @@ class DialogueCoordinator:
         self._validate_execution(request)
         if type(request.command) in {
             PresentCandidates,
+            StartTopic,
             CommitAgentTurn,
             ReportWorkFailure,
         }:

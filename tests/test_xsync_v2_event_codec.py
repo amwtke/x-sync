@@ -26,6 +26,7 @@ from xsync_v2.domain import (
     RecoverWork,
     ReportWorkFailure,
     ResumeTopic,
+    SelectTopic,
     SessionLifecycle,
     SessionStarted,
     StartSession,
@@ -110,7 +111,10 @@ def trigger(kind, work_id, parent=None):
         runtime_epoch="epoch-1",
         parent_turn_id=parent,
         contract_digest=(
-            None if kind is TriggerKind.TOPIC_CANDIDATES else digest("contract")
+            None
+            if kind
+            in {TriggerKind.TOPIC_CANDIDATES, TriggerKind.TOPIC_SELECTION}
+            else digest("contract")
         ),
         input_digest=digest(f"input:{work_id}"),
         evidence_digest=digest("evidence"),
@@ -857,6 +861,16 @@ class EventCodecTest(unittest.TestCase):
             dialogue_request_digest(
                 replace(record, expected_conversation_version=1)
             ),
+        )
+        selection_request = replace(
+            record,
+            expected_conversation_version=2,
+            command=SelectTopic("command-select", "Outbox"),
+            context=context(TriggerKind.TOPIC_SELECTION, "selection-trigger"),
+        )
+        self.assertRegex(
+            dialogue_request_digest(selection_request),
+            r"^sha256:[0-9a-f]{64}$",
         )
         failure_request = replace(
             record,

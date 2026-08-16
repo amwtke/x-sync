@@ -89,6 +89,7 @@ class WorkWakeObserverTest(unittest.TestCase):
     def test_all_current_trigger_producers_wake(self) -> None:
         tags = (
             "session_started",
+            "topic_selection_submitted",
             "topic_started",
             "learner_turn_submitted",
             "topic_resumed",

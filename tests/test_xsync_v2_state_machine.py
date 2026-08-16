@@ -38,6 +38,7 @@ from xsync_v2.domain import (
     Rejected,
     ReportWorkFailure,
     ResumeTopic,
+    SelectTopic,
     SessionLifecycle,
     SessionStarted,
     StartSession,
@@ -48,6 +49,7 @@ from xsync_v2.domain import (
     TopicLifecycle,
     TopicPaused,
     TopicResumed,
+    TopicSelectionSubmitted,
     TopicStarted,
     TriggerBinding,
     TriggerKind,
@@ -119,7 +121,8 @@ def context(
             parent_turn_id=parent_turn_id,
             contract_digest=(
                 None
-                if kind is TriggerKind.TOPIC_CANDIDATES
+                if kind
+                in {TriggerKind.TOPIC_CANDIDATES, TriggerKind.TOPIC_SELECTION}
                 else digest("contract")
             ),
             input_digest=(
@@ -204,6 +207,8 @@ def commit_for_test(state, pending):
 def default_context(state, command):
     if isinstance(command, (StartSession, PresentCandidates)):
         return context(TriggerKind.TOPIC_CANDIDATES)
+    if isinstance(command, SelectTopic):
+        return context(TriggerKind.TOPIC_SELECTION)
     if isinstance(command, StartTopic):
         return context(TriggerKind.INITIAL_TURN)
     if isinstance(command, CommitAgentTurn):
@@ -263,6 +268,71 @@ def apply(state, command, decision_context=None):
 
 
 class StateMachineTest(unittest.TestCase):
+    def test_topic_selection_is_durable_work_before_host_contract(self):
+        state = apply(initial_dialogue_state("dlg-1", 1), StartSession("start"))
+        state = apply(
+            state,
+            PresentCandidates("candidates", ("支付一致性", "Outbox")),
+        )
+        invalid = SelectTopic("invalid", "不存在的话题")
+        self.assertEqual(
+            Rejected("VALIDATION_FAILED"),
+            decide(
+                state,
+                invalid,
+                context(TriggerKind.TOPIC_SELECTION),
+            ),
+        )
+        selection_context = context(
+            TriggerKind.TOPIC_SELECTION,
+            work_id="selection-trigger",
+        )
+        state = apply(
+            state,
+            SelectTopic("select", "支付一致性"),
+            selection_context,
+        )
+        self.assertEqual(ConversationPhase.WAITING_HOST, state.phase)
+        self.assertEqual((), state.candidates)
+        self.assertEqual("支付一致性", state.selected_candidate)
+        self.assertIsNotNone(state.session_work)
+        assert state.session_work is not None
+        self.assertIs(
+            TriggerKind.TOPIC_SELECTION,
+            state.session_work.trigger.kind,
+        )
+
+        started = apply(
+            state,
+            StartTopic("start-topic", contract(), "支付一致性"),
+            context(TriggerKind.INITIAL_TURN, work_id="initial-trigger"),
+        )
+        self.assertEqual(ConversationPhase.WAITING_HOST, started.phase)
+        self.assertIsNone(started.selected_candidate)
+        self.assertIsNone(started.session_work)
+        self.assertIsNotNone(started.active_topic)
+
+        forged = TopicSelectionSubmitted(
+            "Outbox",
+            cast(TriggerBinding, selection_context.trigger),
+        )
+        choosing = apply(
+            apply(initial_dialogue_state("dlg-2", 1), StartSession("start-2")),
+            PresentCandidates("candidates-2", ("支付一致性",)),
+        )
+        with self.assertRaisesRegex(ValueError, "ILLEGAL_EVENT_TRANSITION"):
+            reduce(
+                choosing,
+                CommittedDialogueEvent(
+                    "forged-selection",
+                    choosing.sequence + 1,
+                    choosing.conversation_version,
+                    choosing.conversation_version + 1,
+                    "forged",
+                    forged,
+                ),
+            )
+
     def test_socratic_turn_uses_one_canonical_path(self):
         state = initial_dialogue_state("dlg-1", 1)
         state = apply(state, StartSession("c1"))

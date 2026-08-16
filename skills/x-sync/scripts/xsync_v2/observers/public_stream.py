@@ -24,6 +24,7 @@ _PUBLIC_FIELD_ORDER: dict[str, tuple[str, ...]] = {
     "state_changed": (),
     "session_started": (),
     "topic_candidates_presented": ("candidates",),
+    "topic_selection_submitted": ("candidate",),
     "topic_started": (
         "topic_run_id",
         "title",

@@ -36,6 +36,7 @@ from xsync_v2.domain import (
     QuestionIntent,
     RecoverWork,
     ResumeTopic,
+    SelectTopic,
     SessionLifecycle,
     SubmitLearnerTurn,
     TaskScope,
@@ -323,7 +324,13 @@ class BrowserHttpTest(unittest.TestCase):
                     expected_type,
                 )
 
-        unsupported = self.api.handle(
+        self.coordinator.state = replace(
+            state(),
+            phase=ConversationPhase.CHOOSING_TOPIC,
+            active_topic=None,
+            candidates=("支付一致性", "Outbox"),
+        )
+        selected = self.api.handle(
             request(
                 "POST",
                 "/api/v2/topic",
@@ -331,10 +338,13 @@ class BrowserHttpTest(unittest.TestCase):
                 headers=(*common, ("Idempotency-Key", "select-key")),
             )
         )
-        self.assertEqual(409, unsupported.status)
-        self.assertEqual(
-            "TOPIC_STATE_CONFLICT",
-            json.loads(unsupported.body)["error"]["code"],
+        self.assertEqual(200, selected.status)
+        selection_request = self.coordinator.requests[-1]
+        self.assertIs(type(selection_request.command), SelectTopic)
+        self.assertEqual("Outbox", selection_request.command.candidate)
+        self.assertIs(
+            TriggerKind.TOPIC_SELECTION,
+            selection_request.context.trigger.kind,
         )
 
     def test_stream_is_authenticated_cursor_resumable_and_safe(self) -> None:

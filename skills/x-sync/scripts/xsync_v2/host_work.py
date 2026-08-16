@@ -33,7 +33,9 @@ from .domain import (
     Rejected,
     ReportWorkFailure,
     SessionStarted,
+    StartTopic,
     TopicResumed,
+    TopicSelectionSubmitted,
     TopicStarted,
     TriggerBinding,
     WorkFailure,
@@ -89,7 +91,9 @@ from .work import (
 
 _ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
 
-HostWorkCommand: TypeAlias = PresentCandidates | CommitAgentTurn | ReportWorkFailure
+HostWorkCommand: TypeAlias = (
+    PresentCandidates | StartTopic | CommitAgentTurn | ReportWorkFailure
+)
 
 
 class HostWorkServiceError(RuntimeError):
@@ -162,6 +166,8 @@ def _created_trigger(event: CommittedDialogueEvent) -> TriggerBinding | None:
     payload = event.payload
     if type(payload) is SessionStarted:
         return payload.candidate_trigger
+    if type(payload) is TopicSelectionSubmitted:
+        return payload.next_trigger
     if type(payload) is TopicStarted:
         return payload.initial_trigger
     if type(payload) is LearnerTurnSubmitted:
@@ -392,7 +398,12 @@ class HostWorkService:
         if (
             type(request) is not HostWorkPublishRequest
             or type(request.command)
-            not in {PresentCandidates, CommitAgentTurn, ReportWorkFailure}
+            not in {
+                PresentCandidates,
+                StartTopic,
+                CommitAgentTurn,
+                ReportWorkFailure,
+            }
             or type(request.work) is not RunnableWork
             or type(request.context) is not DecisionContext
             or type(request.actor) is not DialogueActor

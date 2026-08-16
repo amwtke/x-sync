@@ -675,6 +675,7 @@ lease overlay: unclaimed ↔ leased        # 临时协调状态，不进入对�
 `kind` 至少包括：
 
 - `topic_candidates`：session-level，由启动或 switch event 触发；
+- `topic_selection`：session-level，由 learner 从当前候选中精确选择后触发；只携带 selection intent，Host result 原子提交 `topic_started`；
 - `topic_clarification`：session-level，由含糊的 `custom_topic_submitted` 触发，在创建 Topic Contract 前只澄清一个范围问题；
 - `initial_turn`：由 `topic_started` 触发；
 - `learner_reply`：由 `learner_turn_submitted` 触发；
@@ -734,6 +735,7 @@ Canonical state 在每次 `reduce` 后必须同时满足：
 | --- | --- | --- |
 | `session_started` | registry-current；`session_lifecycle=new`；尚无 start event | `session_lifecycle=open`；创建 candidate work；`phase=waiting_host` |
 | `topic_candidates_presented` | `waiting_host`；candidate work 与 digests 匹配 | 完成 work、保存候选；`phase=choosing_topic` |
+| `topic_selection_submitted` | `choosing_topic`；选择值精确属于当前候选；无 active Topic/session work | 只保存 learner selection intent、清除候选展示并创建 `topic_selection` work；`phase=waiting_host`；不得创建 provisional Contract/Topic Run |
 | `custom_topic_submitted` | `choosing_topic`；无 pending session work | 保存原话、创建 clarification work；`phase=waiting_host` |
 | `topic_clarification_requested` | clarification work、generation 和 digest 匹配 | 完成 work、保存唯一澄清问题；`phase=clarifying_topic` |
 | `topic_clarification_answered` | `clarifying_topic`；parent 是当前问题 | 保存回答、创建新 clarification work；`phase=waiting_host` |
@@ -760,7 +762,7 @@ Canonical state 在每次 `reduce` 后必须同时满足：
 | 显式恢复 | `recoverable_error`；动作合法 | 使用新 trigger/work id 进入 `waiting_host` |
 | `session_ended` | `session_lifecycle=open`；无 active Topic、pending turn 或 runnable work；必须持有与 registry `session_end` fence 同 generation 的 `FencedQuiesceAuthority`，且不存在 A→B handoff | `session_lifecycle=ended`、`phase=none`；以后只允许 read 和 version-neutral export/audit/effect completion |
 
-候选选择或 custom-topic 澄清完成后，必须直接提交一个含 selection、Topic Contract 和 initial work 的 `topic_started` 复合事件，不能依赖两个 Observer 回调串联。同理，任何被产品定义为原子的行为都必须由单个复合事件表达，不能暴露中间半状态。
+`topic_selection_submitted` 只表示已经 durable 接收 learner intent，并让 Host 生成受证据约束的 Contract；它不是 provisional Topic Run。Host result 必须以一个含 selection、Topic Contract、active Topic 和 initial work 的 `topic_started` 复合事件完成该 work，不能用 Observer 再补第二个语义事件。custom-topic 澄清完成也服从同一 `topic_started` 原子边界。同理，任何被产品定义为原子的行为都必须由单个复合事件表达，不能暴露“已有 Contract 但尚无 active Topic”的半状态。
 
 ## 9. Browser HTTP v2
 

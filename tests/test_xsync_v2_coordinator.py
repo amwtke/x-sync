@@ -27,6 +27,7 @@ from xsync_v2.domain import (
     RecoverWork,
     ReportWorkFailure,
     SessionLifecycle,
+    SelectTopic,
     StartTopic,
     TriggerBinding,
     TriggerKind,
@@ -67,6 +68,7 @@ from xsync_v2.work_identity import derive_canonical_work_id
 from xsync_v2.work import derive_runnable_work
 
 HOST = DialogueActor(ActorKind.HOST, "host.test")
+LEARNER = DialogueActor(ActorKind.LEARNER, "learner.test")
 
 
 class InjectedCrash(RuntimeError):
@@ -246,6 +248,32 @@ class CoordinatorTest(unittest.TestCase):
 
     def make_active_topic(self, resolution):
         _, candidates = self.present_candidates(resolution)
+        selection_trigger = TriggerBinding(
+            TriggerKind.TOPIC_SELECTION,
+            "work.selection",
+            resolution.config.runtime_epoch,
+            None,
+            None,
+            digest("selection-input"),
+            resolution.config.evidence_digest,
+        )
+        selected = self.coordinator().execute(
+            DialogueExecutionRequest(
+                resolution.config.session_id,
+                candidates.state.conversation_version,
+                SelectTopic("cmd.select", "支付失败边界"),
+                DecisionContext(
+                    resolution.registry_state.generation,
+                    selection_trigger,
+                    EvidenceCheck(
+                        EvidenceHealth.CURRENT,
+                        resolution.config.evidence_digest,
+                    ),
+                ),
+                resolution.config.created_at,
+                LEARNER,
+            )
+        )
         topic_contract = contract()
         trigger = TriggerBinding(
             TriggerKind.INITIAL_TURN,
@@ -264,16 +292,17 @@ class CoordinatorTest(unittest.TestCase):
                 resolution.config.evidence_digest,
             ),
         )
-        return self.coordinator().execute(
+        _request, committed = self.publish_host(
             DialogueExecutionRequest(
                 resolution.config.session_id,
-                candidates.state.conversation_version,
-                StartTopic("cmd.topic", topic_contract),
+                selected.state.conversation_version,
+                StartTopic("cmd.topic", topic_contract, "支付失败边界"),
                 context,
                 resolution.config.created_at,
                 HOST,
             )
         )
+        return committed
 
     def test_first_creation_persists_config_bootstraps_and_resumes(self):
         config_a = config("dlg-a")

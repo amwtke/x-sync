@@ -12,6 +12,7 @@ from xsync_v2.domain import (
     GateStatus,
     Lens,
     PresentCandidates,
+    SelectTopic,
     StartSession,
     StartTopic,
     SubmitLearnerTurn,
@@ -154,6 +155,60 @@ class HostContextTest(unittest.TestCase):
         self.assertEqual(candidate_source.task_scope, capsule.task_scope)
         self.assertIs(Lens.MIXED, capsule.current_lens)
         self.assertEqual(1, len(capsule.evidence_claims))
+
+    def test_topic_selection_context_carries_the_exact_learner_choice(self) -> None:
+        state = apply(initial_dialogue_state("dlg-1", 1), StartSession("start"))
+        state = apply(
+            state,
+            PresentCandidates("candidates", ("支付一致性", "Outbox")),
+        )
+        state = apply(state, SelectTopic("select", "Outbox"))
+        assert state.session_work is not None
+        selection_work = derive_runnable_work(
+            state,
+            WorkOrigin(
+                state.session_work.trigger_event_id,
+                state.session_work.trigger_event_sequence,
+                state.session_work.trigger,
+            ),
+        )
+        assert selection_work is not None
+        selection_source = HostContextSource(
+            topic_contract=None,
+            task_scope="为支付仓库建立一个可教学的话题契约",
+            current_lens=Lens.MIXED,
+            gates=(),
+            previous_question=None,
+            learner_turn=None,
+            learner_model=(),
+            priority_gap="需要把用户选择规范化为 Topic Contract",
+            evidence_claims=(
+                EvidenceContextClaim(
+                    "ev-outbox",
+                    "Outbox 负责跨事务发布恢复",
+                    "docs/outbox.md:10",
+                    digest("outbox"),
+                ),
+            ),
+            through_event_sequence=selection_work.observed_sequence,
+            selected_candidate="Outbox",
+        )
+
+        capsule = build_host_context(selection_work, selection_source)
+
+        self.assertEqual("Outbox", capsule.selected_candidate)
+        self.assertEqual(
+            "Outbox",
+            json.loads(encode_host_context(capsule))["selected_candidate"],
+        )
+        with self.assertRaisesRegex(
+            HostContextError,
+            "HOST_CONTEXT_WORK_MISMATCH",
+        ):
+            build_host_context(
+                selection_work,
+                replace(selection_source, selected_candidate=None),
+            )
 
     def test_oversized_learner_turn_is_utf8_safely_truncated_with_read_proof(
         self,

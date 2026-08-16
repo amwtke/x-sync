@@ -92,6 +92,7 @@ class InsightProvenance(StrEnum):
 
 class TriggerKind(StrEnum):
     TOPIC_CANDIDATES = "topic_candidates"
+    TOPIC_SELECTION = "topic_selection"
     INITIAL_TURN = "initial_turn"
     LEARNER_REPLY = "learner_reply"
     REGROUND = "reground"
@@ -281,6 +282,7 @@ class DialogueState:
     session_work: CurrentWorkState | None
     active_topic: TopicRunState | None
     paused_topics: tuple[TopicRunState, ...]
+    selected_candidate: str | None = None
 
     @property
     def session_unresolved_trigger(self) -> TriggerBinding | None:
@@ -302,9 +304,18 @@ class PresentCandidates:
 
 
 @dataclass(frozen=True, slots=True)
+class SelectTopic:
+    """Select one presented candidate and request a Host-built contract."""
+
+    command_id: str
+    candidate: str
+
+
+@dataclass(frozen=True, slots=True)
 class StartTopic:
     command_id: str
     contract: TopicContract
+    selected_candidate: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -366,6 +377,7 @@ class FencedQuiesceContext:
 DialogueCommand: TypeAlias = (
     StartSession
     | PresentCandidates
+    | SelectTopic
     | StartTopic
     | CommitAgentTurn
     | SubmitLearnerTurn
@@ -388,10 +400,20 @@ class CandidatesPresented:
 
 
 @dataclass(frozen=True, slots=True)
+class TopicSelectionSubmitted:
+    """Learner selection which creates contract-building Host work."""
+
+    candidate: str
+    next_trigger: TriggerBinding
+
+
+@dataclass(frozen=True, slots=True)
 class TopicStarted:
     contract: TopicContract
     evidence: EvidenceCheck
     initial_trigger: TriggerBinding
+    selected_candidate: str | None = None
+    selection_trigger: TriggerBinding | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -478,6 +500,7 @@ class WorkRecoveryRequested:
 DialogueEventPayload: TypeAlias = (
     SessionStarted
     | CandidatesPresented
+    | TopicSelectionSubmitted
     | TopicStarted
     | AgentTurnCommitted
     | LearnerTurnSubmitted

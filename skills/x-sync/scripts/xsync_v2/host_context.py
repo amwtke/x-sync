@@ -18,6 +18,7 @@ from .domain import (
     Lens,
     TaskScope,
     TopicContract,
+    TriggerKind,
 )
 from .event_codec import (
     PROTOCOL_VERSION,
@@ -79,6 +80,7 @@ class HostContextSource:
     priority_gap: str | None
     evidence_claims: tuple[EvidenceContextClaim, ...]
     through_event_sequence: int
+    selected_candidate: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,6 +102,7 @@ class HostContextCapsule:
     learner_model_digest: str
     through_event_sequence: int
     context_digest: str
+    selected_candidate: str | None = None
 
 
 def _nonblank(value: object, *, max_bytes: int = _MAX_TEXT_BYTES) -> bool:
@@ -259,6 +262,7 @@ def _validate_source(value: object) -> HostContextSource:
         or type(value.learner_model) is not tuple
         or any(not _valid_model(item) for item in value.learner_model)
         or not _valid_optional_text(value.priority_gap)
+        or not _valid_optional_text(value.selected_candidate)
         or type(value.evidence_claims) is not tuple
         or not value.evidence_claims
         or type(value.through_event_sequence) is not int
@@ -355,6 +359,7 @@ def _with_digest(
         learner_model_digest=model_digest,
         through_event_sequence=source.through_event_sequence,
         context_digest="",
+        selected_candidate=source.selected_candidate,
     )
     digest = sha256_digest(
         canonical_json_bytes(_capsule_tree(provisional, include_digest=False))
@@ -375,6 +380,7 @@ def _with_digest(
         learner_model_digest=provisional.learner_model_digest,
         through_event_sequence=provisional.through_event_sequence,
         context_digest=digest,
+        selected_candidate=provisional.selected_candidate,
     )
 
 
@@ -402,6 +408,10 @@ def build_host_context(
         or (
             source.topic_contract is not None
             and source.task_scope != source.topic_contract.task_scope.summary
+        )
+        or (
+            (work.kind is TriggerKind.TOPIC_SELECTION)
+            != (source.selected_candidate is not None)
         )
     ):
         raise HostContextError("HOST_CONTEXT_WORK_MISMATCH")
@@ -453,6 +463,7 @@ def encode_host_context(capsule: HostContextCapsule) -> bytes:
             capsule.priority_gap,
             capsule.evidence_claims,
             capsule.through_event_sequence,
+            capsule.selected_candidate,
         )
         _validate_source(source)
         if (

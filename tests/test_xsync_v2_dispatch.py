@@ -29,6 +29,7 @@ from xsync_v2.domain import (
     SessionStarted,
     TopicPaused,
     TopicResumed,
+    TopicSelectionSubmitted,
     TopicStarted,
     TriggerBinding,
     TriggerKind,
@@ -131,6 +132,14 @@ class DispatchTest(unittest.TestCase):
             dialogue_event(
                 "event-3",
                 3,
+                TopicSelectionSubmitted(
+                    "补偿边界",
+                    trigger(TriggerKind.TOPIC_SELECTION),
+                ),
+            ),
+            dialogue_event(
+                "event-4",
+                4,
                 TopicStarted(
                     topic_contract,
                     evidence,
@@ -138,8 +147,8 @@ class DispatchTest(unittest.TestCase):
                 ),
             ),
             dialogue_event(
-                "event-4",
-                4,
+                "event-5",
+                5,
                 AgentTurnCommitted(
                     agent_turn(),
                     trigger(TriggerKind.INITIAL_TURN),
@@ -151,11 +160,15 @@ class DispatchTest(unittest.TestCase):
         mapped = dialogue_batch("session-1", events)
 
         self.assertEqual(StreamKind.DIALOGUE, mapped.stream_kind)
-        self.assertEqual((1, 2, 3, 4), tuple(item.sequence for item in mapped.events))
+        self.assertEqual(
+            (1, 2, 3, 4, 5),
+            tuple(item.sequence for item in mapped.events),
+        )
         self.assertEqual(
             (
                 "session_started",
                 "topic_candidates_presented",
+                "topic_selection_submitted",
                 "topic_started",
                 "agent_turn_committed",
             ),
@@ -163,6 +176,10 @@ class DispatchTest(unittest.TestCase):
         )
         candidates = dict(mapped.events[1].payload.fields)["candidates"]
         self.assertEqual(["退款窗口", "补偿边界"], json.loads(candidates))
+        self.assertEqual(
+            "补偿边界",
+            dict(mapped.events[2].payload.fields)["candidate"],
+        )
         rendered = repr(mapped)
         self.assertNotIn("runtime-epoch-secret", rendered)
         self.assertNotIn(evidence.evidence_digest, rendered)

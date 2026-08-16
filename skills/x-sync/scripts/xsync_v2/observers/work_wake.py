@@ -13,6 +13,7 @@ from ..observer import CommittedBatch, StreamKind
 _WORK_TRIGGER_EVENT_TYPES = frozenset(
     {
         "session_started",
+        "topic_selection_submitted",
         "topic_started",
         "learner_turn_submitted",
         "topic_resumed",

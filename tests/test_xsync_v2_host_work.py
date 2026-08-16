@@ -6,6 +6,11 @@ from unittest import mock
 
 import tests.xsync_v2_path  # noqa: F401
 from tests.test_xsync_v2_state_machine import agent_turn, contract
+from xsync_v2.browser_service import (
+    BrowserCommandRequest,
+    BrowserCommandService,
+    SelectTopicIntent,
+)
 from xsync_v2.coordinator import (
     CoordinatorError,
     DialogueCoordinator,
@@ -21,7 +26,10 @@ from xsync_v2.domain import (
     EvidenceHealth,
     PresentCandidates,
     ReportWorkFailure,
+    SelectTopic,
     StartTopic,
+    TopicSelectionSubmitted,
+    TopicStarted,
     TriggerBinding,
     TriggerKind,
     WorkDeadLettered,
@@ -55,6 +63,7 @@ from xsync_v2.work import RunnableWork, derive_runnable_work
 
 
 HOST = DialogueActor(ActorKind.HOST, "host.test")
+LEARNER = DialogueActor(ActorKind.LEARNER, "learner.test")
 RUNTIME = DialogueActor(ActorKind.RUNTIME, "runtime.test")
 
 
@@ -71,6 +80,79 @@ class FakeClock:
 
 
 class HostWorkServiceTest(unittest.TestCase):
+    def test_browser_selection_becomes_lease_fenced_topic_start(self) -> None:
+        candidate_work, candidate_fence = self.bootstrap_candidates()
+        candidates = self.service.publish(
+            self.candidates_request(candidate_work, candidate_fence)
+        )
+        browser = BrowserCommandService(
+            self.coordinator,
+            lambda item: EvidenceCheck(
+                EvidenceHealth.CURRENT,
+                item.evidence_digest,
+            ),
+            clock=lambda: self.config.created_at,
+        )
+
+        selected = browser.execute(
+            BrowserCommandRequest(
+                "dlg-a",
+                "select-compensation",
+                candidates.state.conversation_version,
+                SelectTopicIntent("补偿落点"),
+            )
+        )
+
+        self.assertIs(type(selected.events[-1].payload), TopicSelectionSubmitted)
+        self.assertEqual("补偿落点", selected.state.selected_candidate)
+        selection_work = self.current_work()
+        selection_fence = self.claim(selection_work, "selection-e2e")
+        topic_contract = contract()
+        initial_trigger = TriggerBinding(
+            TriggerKind.INITIAL_TURN,
+            "initial-after-selection",
+            self.config.runtime_epoch,
+            None,
+            topic_contract.contract_digest,
+            digest("initial-after-selection"),
+            self.config.evidence_digest,
+        )
+        key = "start-selected-topic"
+        started = self.service.publish(
+            HostWorkPublishRequest(
+                key,
+                selection_work,
+                StartTopic(
+                    host_command_id(key),
+                    topic_contract,
+                    "补偿落点",
+                ),
+                DecisionContext(
+                    1,
+                    initial_trigger,
+                    EvidenceCheck(
+                        EvidenceHealth.CURRENT,
+                        self.config.evidence_digest,
+                    ),
+                ),
+                self.config.created_at,
+                HOST,
+                selection_fence,
+            )
+        )
+
+        payload = started.events[-1].payload
+        self.assertIs(type(payload), TopicStarted)
+        assert isinstance(payload, TopicStarted)
+        self.assertEqual("补偿落点", payload.selected_candidate)
+        assert payload.selection_trigger is not None
+        self.assertEqual(
+            selection_work.trigger_work_id,
+            payload.selection_trigger.work_id,
+        )
+        self.assertIsNotNone(started.state.active_topic)
+        self.assertIsNone(started.state.selected_candidate)
+
     def setUp(self) -> None:
         self.temporary = TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
@@ -242,6 +324,34 @@ class HostWorkServiceTest(unittest.TestCase):
     def start_topic(self) -> tuple[RunnableWork, PublishFence]:
         work, fence = self.bootstrap_candidates()
         outcome = self.service.publish(self.candidates_request(work, fence))
+        selection_trigger = TriggerBinding(
+            TriggerKind.TOPIC_SELECTION,
+            "selection-trigger",
+            self.config.runtime_epoch,
+            None,
+            None,
+            digest("selection-input"),
+            self.config.evidence_digest,
+        )
+        self.coordinator.execute(
+            DialogueExecutionRequest(
+                "dlg-a",
+                outcome.state.conversation_version,
+                SelectTopic("select-topic", "支付失败边界"),
+                DecisionContext(
+                    1,
+                    selection_trigger,
+                    EvidenceCheck(
+                        EvidenceHealth.CURRENT,
+                        self.config.evidence_digest,
+                    ),
+                ),
+                self.config.created_at,
+                LEARNER,
+            )
+        )
+        selection_work = self.current_work()
+        selection_fence = self.claim(selection_work, "selection")
         topic_contract = contract()
         next_trigger = TriggerBinding(
             TriggerKind.INITIAL_TURN,
@@ -252,11 +362,16 @@ class HostWorkServiceTest(unittest.TestCase):
             digest("topic-input"),
             self.config.evidence_digest,
         )
-        self.coordinator.execute(
-            DialogueExecutionRequest(
-                "dlg-a",
-                outcome.state.conversation_version,
-                StartTopic("start-topic", topic_contract),
+        start_key = "start-topic"
+        self.service.publish(
+            HostWorkPublishRequest(
+                start_key,
+                selection_work,
+                StartTopic(
+                    host_command_id(start_key),
+                    topic_contract,
+                    "支付失败边界",
+                ),
                 DecisionContext(
                     1,
                     next_trigger,
@@ -267,6 +382,7 @@ class HostWorkServiceTest(unittest.TestCase):
                 ),
                 self.config.created_at,
                 HOST,
+                selection_fence,
             )
         )
         topic_work = self.current_work()
@@ -830,6 +946,7 @@ class HostWorkServiceTest(unittest.TestCase):
         )
         commands = (
             PresentCandidates("candidates", ("topic",)),
+            StartTopic("start-topic", contract(), "topic"),
             CommitAgentTurn("turn", agent_turn()),
             ReportWorkFailure(
                 "failure",

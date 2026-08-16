@@ -21,6 +21,7 @@ from .browser_service import (
     PauseTopicIntent,
     RecoverWorkIntent,
     ResumeTopicIntent,
+    SelectTopicIntent,
     SubmitTurnIntent,
 )
 from .domain import (
@@ -219,6 +220,8 @@ def _allowed_actions(state: DialogueState) -> tuple[str, ...]:
         actions.add("pause")
     if state.phase is ConversationPhase.AWAITING_USER:
         actions.add("submit_turn")
+    if state.phase is ConversationPhase.CHOOSING_TOPIC:
+        actions.add("select")
     if state.phase is ConversationPhase.NONE and state.paused_topics:
         actions.add("resume")
     if state.phase is ConversationPhase.RECOVERABLE_ERROR:
@@ -258,6 +261,7 @@ def _public_state(state: DialogueState) -> dict[str, object]:
         "lifecycle": state.lifecycle.value,
         "phase": state.phase.value,
         "candidates": list(state.candidates),
+        "selected_candidate": state.selected_candidate,
         "topic": topic_view,
         "paused_topics": [
             {
@@ -535,6 +539,11 @@ class BrowserApi:
                 raise BrowserApiError("VALIDATION_FAILED")
             return SubmitTurnIntent(question_id, text)
         action = body.get("action")
+        if action == "select" and set(body) == {"action", "candidate"}:
+            candidate = body["candidate"]
+            if type(candidate) is not str:
+                raise BrowserApiError("VALIDATION_FAILED")
+            return SelectTopicIntent(candidate)
         if action == "pause" and set(body) == {"action"}:
             return PauseTopicIntent()
         if action == "resume" and set(body) == {"action", "topic_run_id"}:
