@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="zh-Hans">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>X-Sync · 仓库对话</title>
+  <link rel="stylesheet" href="/chat.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="X-Sync 首页"><span class="brand-mark" aria-hidden="true">x</span>X-Sync</a>
+    <span id="repository" class="repository"></span>
+    <div class="header-actions">
+      <span id="host" class="host"></span>
+      <button id="export" class="quiet" type="button" disabled>导出 MD <span aria-hidden="true">↗</span></button>
+    </div>
+  </header>
+
+  <main id="main">
+    <section id="welcome" class="welcome">
+      <span class="welcome-mark" aria-hidden="true">✳</span>
+      <p class="eyebrow">从一个好奇开始</p>
+      <h1>一起聊聊这个项目。</h1>
+      <p class="intro">想理解代码、讨论设计，或理清一个疑问？<br>直接问就好。</p>
+      <div id="suggestions" class="suggestions" aria-label="推荐问题"></div>
+    </section>
+    <section id="messages" class="messages" role="log" aria-label="聊天记录" aria-relevant="additions"></section>
+  </main>
+
+  <div class="composer-area">
+    <div class="composer-width">
+      <div id="notice" class="notice" role="status" hidden></div>
+      <div id="status" class="status" aria-live="polite">正在连接…</div>
+      <div id="suggestion-tray" class="suggestion-tray" hidden></div>
+      <form id="composer" class="composer">
+        <label for="prompt" class="sr-only">向 X-Sync 提问</label>
+        <textarea id="prompt" rows="1" placeholder="关于这个项目，你想问什么？" maxlength="32000" required></textarea>
+        <div class="composer-actions">
+          <button id="recommend" type="button" class="quiet" aria-expanded="false">✧ 推荐问题</button>
+          <button id="send" type="submit" class="send" aria-label="发送问题" disabled><span aria-hidden="true">↑</span></button>
+        </div>
+      </form>
+      <p class="footnote">Enter 发送 · Shift + Enter 换行<span>对话保存在本机，可随时导出。</span></p>
+    </div>
+  </div>
+  <script src="/chat.js" defer></script>
+</body>
+</html>

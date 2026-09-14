@@ -4593,6 +4593,10 @@ def dialogue_main(argv: list[str]) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     arguments = sys.argv[1:] if argv is None else argv
+    if arguments and arguments[0] == "chat":
+        from xsync_chat.cli import main as chat_main
+
+        return chat_main(arguments[1:])
     if arguments and arguments[0] == "dialogue":
         return dialogue_main(arguments[1:])
     args = parser().parse_args(arguments)

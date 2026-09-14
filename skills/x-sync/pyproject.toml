@@ -4,6 +4,8 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = ["B", "E", "F", "RUF", "UP"]
+# Chinese punctuation in user-facing text.
+allowed-confusables = ["，", "：", "？"]
 
 [tool.mypy]
 python_version = "3.11"

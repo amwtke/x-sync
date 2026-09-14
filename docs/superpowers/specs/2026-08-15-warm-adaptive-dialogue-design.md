@@ -1,6 +1,6 @@
 # X-Sync v2：温暖、话题驱动的连续苏格拉底对话
 
-状态：设计已确认，v2 状态机/Observer 内核第一切片已实现；耐久事件存储与 registry fencing 待实现
+状态：历史 Dialogue v2 引导式对话设计。当前默认入口已改为开放式聊天，见 [Open chat runtime](../../../skills/x-sync/references/open-chat.md)；本文保留为显式引导模式的设计记录，实施进度以代码和测试为准。
 
 日期：2026-08-15
 

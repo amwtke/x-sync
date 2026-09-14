@@ -4,12 +4,12 @@
     "name": "amwtke",
     "url": "https://github.com/amwtke"
   },
-  "description": "Evidence-backed repository learning for Claude Code.",
+  "description": "Open repository chat with automatic Claude Code replies.",
   "plugins": [
     {
       "name": "x-sync",
       "source": "./",
-      "description": "Assess and improve human, agent, and repository alignment through adaptive questions.",
+      "description": "Explore repositories through open chat and export the conversation as Markdown.",
       "repository": "https://github.com/amwtke/x-sync"
     }
   ]

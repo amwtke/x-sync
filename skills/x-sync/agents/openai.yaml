@@ -1,7 +1,7 @@
 interface:
   display_name: "X-Sync"
-  short_description: "用仓库证据持续校准工程师、Agent 与代码之间的理解"
-  default_prompt: "Use $x-sync on the current repository or honor -d <target-project> when supplied. Open or resume the default Dialogue v2 local browser conversation: repository-grounded, adaptive, one question at a time, mixed business and technical when relevant, and naturally completed with no fixed question count. Use the legacy fixed-bank quiz only when explicitly requested."
+  short_description: "在本地页面自由讨论仓库，由 Codex 自动回答并导出 Markdown"
+  default_prompt: "Use $x-sync to open or resume a free-form repository chat with automatic Codex replies, optional suggested questions, and Markdown export; honor -d <target-project> when supplied."
 
 policy:
   allow_implicit_invocation: true

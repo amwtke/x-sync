@@ -1,7 +1,7 @@
 {
   "name": "x-sync",
   "displayName": "x-sync",
-  "description": "Assess and improve human, agent, and repository alignment through evidence-backed questions.",
+  "description": "Explore repositories through open chat, automatic host replies, and Markdown export.",
   "repository": "https://github.com/amwtke/x-sync",
   "skills": "./skills/"
 }

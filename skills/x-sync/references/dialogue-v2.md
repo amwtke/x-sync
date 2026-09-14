@@ -1,6 +1,8 @@
 # Dialogue v2 host runbook
 
-Use this runbook only for the default adaptive dialogue. All paths below belong to the selected repository, not the skill repository.
+Use this runbook only when the user explicitly requests guided Socratic Dialogue v2.
+The default is now open chat, described in [open-chat.md](open-chat.md).
+All paths below belong to the selected repository, not the skill repository.
 
 ## State and bootstrap
 
